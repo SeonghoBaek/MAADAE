@@ -273,13 +273,24 @@ def train(model_path='None'):
     g_loss_x_gx = get_residual_loss(X_IN, G_X, type='l1', gamma=alpha)
     g_loss_gx_dgx = get_residual_loss(X_IN, D_GX, type='l1')
 
-    slope = 2.0
-    d_delta = 1.0 / (1.0 + 1.0 / tf.exp(slope * (d_loss_x_dx - d_loss_gx_dgx)))
+    # Simple Balance Mode
+    sigmoid_d_loss_gx_dgx = 1 - tf.nn.sigmoid(d_loss_gx_dgx)
+    sigmoid_g_loss_gx_dgx = tf.nn.sigmoid(d_loss_gx_dgx)
 
-    disc_loss = (d_loss_x_dx - d_delta * d_loss_gx_dgx) + sparsity * get_residual_loss(attention_d_x, None, type='entropy') + \
+    disc_loss = (d_loss_x_dx + sigmoid_d_loss_gx_dgx) + sparsity * get_residual_loss(attention_d_x, None,
+                                                                                       type='entropy') + \
                 sparsity * get_residual_loss(st_attention_d_x, None, type='entropy')
-    gen_loss = (g_loss_x_gx + (1 - d_delta) * g_loss_gx_dgx) + sparsity * get_residual_loss(attention_g, None, type='entropy') + \
+    gen_loss = (g_loss_x_gx + sigmoid_g_loss_gx_dgx) + sparsity * get_residual_loss(attention_g, None,
+                                                                                            type='entropy') + \
                sparsity * get_residual_loss(st_attention_g, None, type='entropy')
+
+    #slope = 2.0
+    #d_delta = 1.0 / (1.0 + 1.0 / tf.exp(slope * (d_loss_x_dx - d_loss_gx_dgx)))
+    #disc_loss = (d_loss_x_dx - d_delta * d_loss_gx_dgx) + sparsity * get_residual_loss(attention_d_x, None, type='entropy') + \
+    #            sparsity * get_residual_loss(st_attention_d_x, None, type='entropy')
+    #gen_loss = (g_loss_x_gx + (1 - d_delta) * g_loss_gx_dgx) + sparsity * get_residual_loss(attention_g, None, type='entropy') + \
+    #           sparsity * get_residual_loss(st_attention_g, None, type='entropy')
+
     pretrain_disc_loss = d_loss_x_dx + sparsity * get_residual_loss(attention_d_x, None, type='entropy') + \
                 sparsity * get_residual_loss(st_attention_d_x, None, type='entropy')
     pretrain_gen_loss = g_loss_x_gx + sparsity * get_residual_loss(attention_g, None, type='entropy') + \
