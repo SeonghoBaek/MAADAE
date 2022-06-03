@@ -468,6 +468,7 @@ if __name__ == '__main__':
     parser.add_argument('--epoch', type=int, help='num epoch', default=40)
     parser.add_argument('--batch_size', type=int, help='Training batch size', default=4)
     parser.add_argument('--alpha', type=int, help='AE loss weight', default=10)
+    parser.add_argument('--pretrain', type=int, help='Number of pretrain epock', default=1)
 
     args = parser.parse_args()
 
@@ -481,6 +482,7 @@ if __name__ == '__main__':
     out_dir = args.out_dir
     num_epoch = args.epoch
     alpha = args.alpha
+    num_epoch_pretrain = args.pretrain
 
     unit_block_depth = 32
     downsample_num = int(np.log2(input_width // 16))
