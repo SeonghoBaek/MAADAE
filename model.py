@@ -186,7 +186,7 @@ def decoder(content, style, activation=tf.nn.relu, norm='batch', scope='decoder'
             if b_use_style is True:
                 l = layers.AdaIN(l, style, scope='adain_' + str(i))
             print(scope + ' Bottleneck Block : ' + str(l.get_shape().as_list()))
-            l = layers.add_se_residual_block(l, filter_dims=[3, 3, block_depth], num_layers=2, act_func=activation,
+            l = layers.add_se_residual_block(l, filter_dims=[3, 3, block_depth], act_func=activation,
                                              norm=norm, b_train=b_train, use_dilation=False, scope='bt_block_' + str(i))
         # Upsample stage
         for i in range(upsample_num):
