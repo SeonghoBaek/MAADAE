@@ -331,7 +331,6 @@ def train(model_path='None'):
         total_input_size = len(tr_files)
         total_steps = (total_input_size * num_epoch * 1.0)
         cur_step = 0
-        num_epoch_pretrain = 50
 
         for e in range(num_epoch):
             tr_files = shuffle(tr_files)
