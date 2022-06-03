@@ -160,7 +160,7 @@ def encoder(in_tensor, activation=tf.nn.relu, norm='batch', scope='encoder', b_t
         # Bottleneck stage
         for i in range(bottleneck_num):
             print(scope + ' Bottleneck Block : ' + str(l.get_shape().as_list()))
-            l = layers.add_se_residual_block(l, filter_dims=[3, 3, block_depth], num_layers=2, act_func=activation,
+            l = layers.add_se_residual_block(l, filter_dims=[3, 3, block_depth], act_func=activation,
                                              norm=norm, b_train=b_train, use_dilation=False, scope='bt_block_' + str(i))
 
         l = layers.global_avg_pool(l, query_dimension, scope='gap')

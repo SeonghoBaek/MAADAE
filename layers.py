@@ -616,7 +616,7 @@ def add_residual_dense_block(in_layer, filter_dims, num_layers, act_func=tf.nn.r
         return l
 
 
-def add_se_residual_block(in_layer, filter_dims, num_layers=2, act_func=tf.nn.relu, norm='layer',
+def add_se_residual_block(in_layer, filter_dims, act_func=tf.nn.relu, norm='layer',
                        b_train=False, use_residual=True, scope='residual_block', use_dilation=False,
                        sn=False, use_bottleneck=True):
     with tf.variable_scope(scope):
@@ -632,7 +632,7 @@ def add_se_residual_block(in_layer, filter_dims, num_layers=2, act_func=tf.nn.re
 
         # Bottle Neck Layer
         if use_bottleneck is True:
-            bn_depth = num_channel_out // (num_layers * 2)
+            bn_depth = num_channel_out // 2
             l = conv(l, scope='bt_conv1', filter_dims=[1, 1, bn_depth], stride_dims=[1, 1],
                      dilation=dilation,
                      non_linear_fn=None, sn=False)
@@ -641,16 +641,15 @@ def add_se_residual_block(in_layer, filter_dims, num_layers=2, act_func=tf.nn.re
         else:
             bn_depth = num_channel_out
 
-        for i in range(num_layers - 1):
-            l = add_residual_layer(l, filter_dims=[filter_dims[0], filter_dims[1], bn_depth], act_func=act_func, norm=norm, b_train=b_train,
-                                          scope='layer' + str(i), dilation=dilation, sn=sn)
+        l = add_residual_layer(l, filter_dims=[filter_dims[0], filter_dims[1], bn_depth], act_func=None, norm=norm, b_train=b_train,
+                               scope='residual_layer', dilation=dilation, sn=sn)
 
         if use_bottleneck is True:
+            l = act_func(l)
             l = conv(l, scope='bt_conv2', filter_dims=[1, 1, num_channel_out], stride_dims=[1, 1],
                      dilation=dilation,
                      non_linear_fn=None, sn=False)
             l = conv_normalize(l, norm=norm, b_train=b_train, scope='bt_norm2')
-            l = act_func(l)
 
         # SE Path
         # Squeeze
@@ -665,11 +664,13 @@ def add_se_residual_block(in_layer, filter_dims, num_layers=2, act_func=tf.nn.re
         if use_residual is True:
             l = tf.add(l, in_layer)
             l = act_func(l)
+        else:
+            l = act_func(l)
 
     return l
 
 
-def add_residual_block(in_layer, filter_dims, num_layers=2, act_func=tf.nn.relu, norm='layer',
+def add_residual_block(in_layer, filter_dims, act_func=tf.nn.relu, norm='layer',
                        b_train=False, use_residual=True, scope='residual_block', use_dilation=False,
                        sn=False, use_bottleneck=False):
     with tf.variable_scope(scope):
@@ -680,12 +681,12 @@ def add_residual_block(in_layer, filter_dims, num_layers=2, act_func=tf.nn.relu,
 
         dilation = [1, 1, 1, 1]
 
-        if use_dilation == True:
+        if use_dilation is True:
             dilation = [1, 2, 2, 1]
 
         # Bottle Neck Layer
         if use_bottleneck is True:
-            bn_depth = num_channel_out // (num_layers * 2)
+            bn_depth = num_channel_out // 2
             l = conv(l, scope='bt_conv1', filter_dims=[1, 1, bn_depth], stride_dims=[1, 1],
                      dilation=[1, 1, 1, 1],
                      non_linear_fn=None, sn=False)
@@ -694,22 +695,8 @@ def add_residual_block(in_layer, filter_dims, num_layers=2, act_func=tf.nn.relu,
         else:
             bn_depth = num_channel_out
 
-        for i in range(num_layers - 1):
-            l = add_residual_layer(l, filter_dims=[filter_dims[0], filter_dims[1], bn_depth], act_func=act_func, norm=norm, b_train=b_train,
-                                          scope='layer' + str(i), dilation=[1, 1, 1, 1], sn=sn)
-
-        if use_dilation is True:
-            dl = add_residual_layer(l, filter_dims=[filter_dims[0], filter_dims[1], bn_depth], act_func=None, norm=norm,
-                                    b_train=b_train,
-                                    scope='dilated_layer', dilation=dilation, sn=sn)
-            #l = add_residual_layer(l, filter_dims=[filter_dims[0], filter_dims[1], bn_depth], act_func=None, norm=norm,
-            #                       b_train=b_train,
-            #                       scope='layer_last', dilation=dilation, sn=sn)
-            l = tf.add(l, dl)
-        else:
-            l = add_residual_layer(l, filter_dims=[filter_dims[0], filter_dims[1], bn_depth], act_func=None, norm=norm,
-                                   b_train=b_train,
-                                   scope='layer_last', dilation=dilation, sn=sn)
+        l = add_residual_layer(l, filter_dims=[filter_dims[0], filter_dims[1], bn_depth], act_func=None, norm=norm, b_train=b_train,
+                               scope='residual_layer', dilation=dilation, sn=sn)
 
         if use_bottleneck is True:
             l = act_func(l)
@@ -720,6 +707,8 @@ def add_residual_block(in_layer, filter_dims, num_layers=2, act_func=tf.nn.relu,
 
         if use_residual is True:
             l = tf.add(l, in_layer)
+            l = act_func(l)
+        else:
             l = act_func(l)
 
     return l
