@@ -280,12 +280,14 @@ def add_dense_layer(layer, filter_dims, act_func=tf.nn.relu, scope='dense_layer'
 
 
 def add_residual_layer(layer, filter_dims, act_func=tf.nn.relu, scope='residual_layer',
-                       norm='layer', b_train=False, use_bias=True, dilation=[1, 1, 1, 1], sn=False):
+                       norm='layer', b_train=False, use_bias=False, dilation=[1, 1, 1, 1], sn=False):
     with tf.variable_scope(scope):
         l = layer
         l = conv(l, scope='conv', filter_dims=filter_dims, stride_dims=[1, 1],
                  dilation=dilation, non_linear_fn=None, bias=use_bias, sn=sn)
-        l = conv_normalize(l, norm=norm, b_train=b_train, scope='norm')
+
+        if norm is not 'None':
+            l = conv_normalize(l, norm=norm, b_train=b_train, scope='norm')
 
         if act_func is not None:
             l = act_func(l)
@@ -308,7 +310,7 @@ def add_dense_transition_layer(layer, filter_dims, stride_dims=[1, 1], act_func=
     return l
 
 
-def global_avg_pool(input_data, output_length=1, padding='VALID', use_bias=True, scope='gloval_avg_pool'):
+def global_avg_pool(input_data, output_length=1, padding='VALID', use_bias=False, scope='gloval_avg_pool'):
     input_dims = input_data.get_shape().as_list()
 
     assert (len(input_dims) == 4)  # batch_size, height, width, num_channels_in
@@ -616,9 +618,40 @@ def add_residual_dense_block(in_layer, filter_dims, num_layers, act_func=tf.nn.r
         return l
 
 
+def add_se_adain_residual_block(in_layer, scale_param, filter_dims, act_func=tf.nn.relu,
+                                scope='se_adain_residual_block', use_dilation=False):
+    with tf.variable_scope(scope):
+        l = in_layer
+        num_channel_out = filter_dims[-1]
+        dilation = [1, 1, 1, 1]
+
+        if use_dilation is True:
+            dilation = [1, 2, 2, 1]
+
+        bn_depth = num_channel_out
+
+        l = conv(l, scope='conv', filter_dims=[filter_dims[0], filter_dims[1], bn_depth], stride_dims=[1, 1],
+                 dilation=dilation, non_linear_fn=None, bias=False)
+        l = AdaIN(l, scale_param)
+
+        # SE Path
+        # Squeeze
+        sl = global_avg_pool(l, output_length=num_channel_out, scope='squeeze')
+        sl = fc(sl, out_dim=num_channel_out // 8, non_linear_fn=tf.nn.leaky_relu, scope='reduction')
+        sl = fc(sl, out_dim=num_channel_out,  non_linear_fn=tf.nn.sigmoid, scope='transform')
+        # Excitation
+        sl = tf.expand_dims(sl, axis=1)
+        sl = tf.expand_dims(sl, axis=2)
+        l = tf.multiply(l, sl)
+        l = tf.add(l, in_layer)
+        l = act_func(l)
+
+    return l
+
+
 def add_se_residual_block(in_layer, filter_dims, act_func=tf.nn.relu, norm='layer',
                        b_train=False, use_residual=True, scope='residual_block', use_dilation=False,
-                       sn=False, use_bottleneck=True):
+                       sn=False, use_bottleneck=False):
     with tf.variable_scope(scope):
         l = in_layer
         input_dims = in_layer.get_shape().as_list()

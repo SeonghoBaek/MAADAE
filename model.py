@@ -184,10 +184,14 @@ def decoder(content, style, activation=tf.nn.relu, norm='batch', scope='decoder'
         # Bottleneck stage
         for i in range(bottleneck_num):
             if b_use_style is True:
-                l = layers.AdaIN(l, style, scope='adain_' + str(i))
-            print(scope + ' Bottleneck Block : ' + str(l.get_shape().as_list()))
-            l = layers.add_se_residual_block(l, filter_dims=[3, 3, block_depth], act_func=activation,
+                l = layers.add_se_adain_residual_block(l, style, filter_dims=[3, 3, block_depth], act_func=activation,
+                                                       use_dilation=False, scope='bt_block_' + str(i))
+            else:
+                l = layers.add_se_residual_block(l, filter_dims=[3, 3, block_depth], act_func=activation,
                                              norm=norm, b_train=b_train, use_dilation=False, scope='bt_block_' + str(i))
+
+            print(scope + ' Bottleneck Block : ' + str(l.get_shape().as_list()))
+
         # Upsample stage
         for i in range(upsample_num):
             # ESPCN upsample
@@ -292,7 +296,7 @@ def train(model_path='None'):
     #           sparsity * get_residual_loss(st_attention_g, None, type='entropy')
 
     pretrain_disc_loss = d_loss_x_dx + sparsity * get_residual_loss(attention_d_x, None, type='entropy') + \
-                sparsity * get_residual_loss(st_attention_d_x, None, type='entropy')
+                         sparsity * get_residual_loss(st_attention_d_x, None, type='entropy')
     pretrain_gen_loss = g_loss_x_gx + sparsity * get_residual_loss(attention_g, None, type='entropy') + \
                          sparsity * get_residual_loss(st_attention_g, None, type='entropy')
 
@@ -321,9 +325,9 @@ def train(model_path='None'):
         try:
             saver = tf.train.Saver()
             saver.restore(sess, model_path)
-            print(util.COLORS.OKGREEN + 'Model Restored' + util.COLORS.ENDC)
+            print('Model Restored')
         except:
-            print(util.COLORS.WARNING + 'Start New Training. Wait ...' + util.COLORS.ENDC)
+            print('Start New Training. Wait ...')
 
         tr_dir = train_data
         tr_files = os.listdir(tr_dir)
@@ -351,16 +355,16 @@ def train(model_path='None'):
                     _, g_loss = sess.run(
                         [pretrain_generator_optimizer, pretrain_gen_loss],
                         feed_dict={X_IN: batch_imgs, LR: lr, B_TRAIN: True})
-                    print(util.COLORS.HEADER + 'pretrain epoch: ' + str(e) + util.COLORS.ENDC + ', ' +
-                          util.COLORS.OKGREEN + 'd_loss: ' + str(d_loss) + ', g_loss: ' + str(d_loss) + util.COLORS.ENDC)
+                    print('pretrain epoch: ' + str(e) + ', ' +
+                          'd_loss: ' + str(d_loss) + ', g_loss: ' + str(g_loss))
                 else:
                     _, d_loss, d_x_imgs, d_x_dx, d_gx_dgx = sess.run([discriminator_optimizer, disc_loss, D_X, d_loss_x_dx, d_loss_gx_dgx], feed_dict={X_IN: batch_imgs, LR: lr, B_TRAIN: True})
                     _, g_loss, g_x_imgs, g_x_gx = sess.run([generator_optimizer, gen_loss, G_X, g_loss_x_gx], feed_dict={X_IN: batch_imgs, LR: lr, B_TRAIN: True})
 
-                    print(util.COLORS.HEADER + 'epoch: ' + str(e) + util.COLORS.ENDC + ', ' +
-                          util.COLORS.OKGREEN + 'd_loss: ' + str(d_loss) + ', d_x_dx: ' + str(d_x_dx) + ', d_gx_dgx: ' + str(d_gx_dgx) + util.COLORS.ENDC +
-                          ', ' + util.COLORS.WARNING + 'g_loss: ' + str(g_loss) +
-                          ', g_x_gx: ' + str(g_x_gx) + util.COLORS.ENDC)
+                    print('epoch: ' + str(e) + ', ' +
+                          'd_loss: ' + str(d_loss) + ', d_x_dx: ' + str(d_x_dx) + ', d_gx_dgx: ' + str(d_gx_dgx) +
+                          ', ' + 'g_loss: ' + str(g_loss) +
+                          ', g_x_gx: ' + str(g_x_gx))
 
                     if itr % 10 == 0:
                         d_images = d_x_imgs[0] * 255.0
@@ -370,11 +374,11 @@ def train(model_path='None'):
                         cv2.imwrite(out_dir + '/g_' + tr_files[start], g_images)
                         print('Elapsed Time at  ' + str(cur_step) + '/' + str(total_steps) + ' steps, ' + str(time.time() - train_start_time) + ' sec')
             try:
-                print(util.COLORS.WARNING + 'Saving model...' + util.COLORS.ENDC)
+                print('Saving model...')
                 saver.save(sess, model_path)
-                print(util.COLORS.OKGREEN + 'Saved.' + util.COLORS.ENDC)
+                print('Saved.')
             except:
-                print(util.COLORS.FAIL + 'Save failed' + util.COLORS.ENDC)
+                print('Save failed')
             print('Training Time: ' + str(time.time() - train_start_time))
 
 
@@ -432,9 +436,9 @@ def test(model_path):
         try:
             saver = tf.train.Saver()
             saver.restore(sess, model_path)
-            print(util.COLORS.OKGREEN + 'Model Loaded' + util.COLORS.ENDC)
+            print('Model Loaded')
         except:
-            print(util.COLORS.WARNING + 'Loading Failed' + util.COLORS.ENDC)
+            print('Loading Failed')
             return
 
         te_dir = test_data
@@ -486,7 +490,7 @@ if __name__ == '__main__':
     unit_block_depth = 32
     downsample_num = int(np.log2(input_width // 16))
     upsample_num = downsample_num
-    bottleneck_num = 4
+    bottleneck_num = 6
     query_dimension = 128
     style_dimension = 128
     representation_dimension = query_dimension
