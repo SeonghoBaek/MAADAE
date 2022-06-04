@@ -185,7 +185,7 @@ def decoder(content, style, activation=tf.nn.relu, norm='batch', scope='decoder'
         for i in range(bottleneck_num):
             if b_use_style is True:
                 l = layers.add_se_adain_residual_block(l, style, filter_dims=[3, 3, block_depth], act_func=activation,
-                                                       use_dilation=False, scope='bt_block_' + str(i))
+                                                       use_dilation=False, scope=scope + '_bt_block_' + str(i))
             else:
                 l = layers.add_se_residual_block(l, filter_dims=[3, 3, block_depth], act_func=activation,
                                              norm=norm, b_train=b_train, use_dilation=False, scope='bt_block_' + str(i))
@@ -349,12 +349,8 @@ def train(model_path='None'):
                 lr = learning_rate * np.cos((np.pi * 7.0 / 16.0) * (cur_step / total_steps))
 
                 if e < num_epoch_pretrain:
-                    _, d_loss = sess.run(
-                        [pretrain_discriminator_optimizer, pretrain_disc_loss],
-                        feed_dict={X_IN: batch_imgs, LR: lr, B_TRAIN: True})
-                    _, g_loss = sess.run(
-                        [pretrain_generator_optimizer, pretrain_gen_loss],
-                        feed_dict={X_IN: batch_imgs, LR: lr, B_TRAIN: True})
+                    _, d_loss = sess.run([pretrain_discriminator_optimizer, pretrain_disc_loss], feed_dict={X_IN: batch_imgs, LR: lr, B_TRAIN: True})
+                    _, g_loss = sess.run([pretrain_generator_optimizer, pretrain_gen_loss], feed_dict={X_IN: batch_imgs, LR: lr, B_TRAIN: True})
                     print('pretrain epoch: ' + str(e) + ', ' +
                           'd_loss: ' + str(d_loss) + ', g_loss: ' + str(g_loss))
                 else:
