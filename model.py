@@ -392,7 +392,8 @@ def calculate_anomaly_scores(imgs1, imgs2, pixel_max=1.0):
         X1 = tf.image.resize_images(X1, (255, 255))
         X2 = tf.image.resize_images(X2, (255, 255))
 
-    anomaly_score = 1 - tf.image.ssim_multiscale(X1, X2, pixel_max)
+    #anomaly_score = 1 - tf.image.ssim_multiscale(X1, X2, pixel_max)
+    anomaly_score = tf.reduce_sum(tf.square(tf.subtract(X1, X2)), axis=[1, 2, 3])
 
     return anomaly_score
 
@@ -417,7 +418,7 @@ def test(model_path):
 
     z_disc_x, s_disc_x = encoder(X_IN, norm='instance', scope=D_Encoder_scope, b_train=B_TRAIN)
     attention_d_x, latent_d_x = memory(z_disc_x, scope=D_M_scope)
-    st_attention_d_x, st_latent_d_x = memory(s_disc_gx, scope=DS_M_scope)
+    st_attention_d_x, st_latent_d_x = memory(s_disc_x, scope=DS_M_scope)
     D_X = decoder(latent_d_x, st_latent_d_x, norm='instance', scope=D_Decoder_scope, b_use_style=True, b_train=B_TRAIN)
 
     anomaly_score = tf.maximum(calculate_anomaly_scores(X_IN, D_GX), calculate_anomaly_scores(X_IN, D_X))
@@ -460,14 +461,14 @@ if __name__ == '__main__':
 
     parser.add_argument('--mode', type=str, help='train/test', default='train')
     parser.add_argument('--model_path', type=str, help='model check point file path', default='model/m.ckpt')
-    parser.add_argument('--train_data', type=str, help='training data directory', default='data/train')
-    parser.add_argument('--test_data', type=str, help='test data directory', default='data/test')
+    parser.add_argument('--train_data', type=str, help='training data directory', default='data/train/cat')
+    parser.add_argument('--test_data', type=str, help='test data directory', default='data/train/cat')
     parser.add_argument('--out_dir', type=str, help='output directory', default='imgs')
-    parser.add_argument('--img_size', type=int, help='training image size', default=512)
-    parser.add_argument('--epoch', type=int, help='num epoch', default=40)
-    parser.add_argument('--batch_size', type=int, help='Training batch size', default=4)
-    parser.add_argument('--alpha', type=int, help='AE loss weight', default=10)
-    parser.add_argument('--pretrain', type=int, help='Number of pretrain epock', default=1)
+    parser.add_argument('--img_size', type=int, help='training image size', default=32)
+    parser.add_argument('--epoch', type=int, help='num epoch', default=100)
+    parser.add_argument('--batch_size', type=int, help='Training batch size', default=16)
+    parser.add_argument('--alpha', type=int, help='AE loss weight', default=1)
+    parser.add_argument('--pretrain', type=int, help='Number of pretrain epoch', default=1)
 
     args = parser.parse_args()
 
