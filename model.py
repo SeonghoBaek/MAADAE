@@ -141,7 +141,7 @@ def encoder(in_tensor, activation=tf.nn.relu, norm='batch', scope='encoder', b_t
 
         style_query = layers.global_avg_pool(s, style_dimension, scope='sgap')
 
-        l = layers.conv(in_tensor, scope='contents_init', filter_dims=[7, 7, block_depth],
+        l = layers.conv(in_tensor, scope='contents_init', filter_dims=[3, 3, block_depth],
                         stride_dims=[1, 1], non_linear_fn=activation)
 
         # Downsample stage.
@@ -176,9 +176,9 @@ def decoder(content, style, activation=tf.nn.relu, norm='batch', scope='decoder'
         l = content
         block_depth = unit_block_depth + (unit_block_depth * upsample_num)
 
-        l = layers.fc(l, 16 * 16, non_linear_fn=activation, scope='fc1', use_bias=True)
-        l = tf.reshape(l, shape=[-1, 16, 16, 1])
-        l = layers.conv(l, scope='init', filter_dims=[4, 4, block_depth],
+        #l = layers.fc(l, 8 * 8, non_linear_fn=activation, scope='fc1', use_bias=True)
+        l = tf.reshape(l, shape=[-1, 8, 8, 2])
+        l = layers.conv(l, scope='init', filter_dims=[3, 3, block_depth],
                         stride_dims=[1, 1], non_linear_fn=activation)
 
         # Bottleneck stage
@@ -204,7 +204,7 @@ def decoder(content, style, activation=tf.nn.relu, norm='batch', scope='decoder'
 
             print(scope + ' Upsampling ' + str(i) + ': ' + str(l.get_shape().as_list()))
 
-        l = layers.conv(l, scope='last', filter_dims=[7, 7, num_channel], stride_dims=[1, 1],
+        l = layers.conv(l, scope='last', filter_dims=[3, 3, num_channel], stride_dims=[1, 1],
                         non_linear_fn=None)
 
         print(scope + ' Output: ' + str(l.get_shape().as_list()))
@@ -234,6 +234,7 @@ def memory(query, scope='aug_mem'):
 
         latent = tf.matmul(attention, aug_mem)  # [B, Q] x [Q, R] = [B, R]
         print(scope + ' attention: ' + str(attention.get_shape().as_list()))
+        latent = tf.add(query, latent)
 
         return attention, latent
 
@@ -250,19 +251,19 @@ def train(model_path='None'):
     # Generator
     z_gen, s_gen = encoder(X_IN, norm='instance',  scope=G_Encoder_scope, b_train=B_TRAIN)
     attention_g, latent_g = memory(z_gen, scope=G_M_scope)
-    st_attention_g, st_latent_g = memory(s_gen, scope=GS_M_scope)
-    G_X = decoder(latent_g, st_latent_g, norm='instance', scope=G_Decoder_scope, b_use_style=True, b_train=B_TRAIN)
+    #st_attention_g, st_latent_g = memory(s_gen, scope=GS_M_scope)
+    G_X = decoder(latent_g, s_gen, norm='instance', scope=G_Decoder_scope, b_use_style=False, b_train=B_TRAIN)
 
     # Discriminator
     z_disc_gx, s_disc_gx = encoder(G_X, norm='instance', scope=D_Encoder_scope, b_train=B_TRAIN)
     attention_d_gx, latent_d_gx = memory(z_disc_gx, scope=D_M_scope)
-    st_attention_d_gx, st_latent_d_gx = memory(s_disc_gx, scope=DS_M_scope)
-    D_GX = decoder(latent_d_gx, st_latent_d_gx, norm='instance', scope=D_Decoder_scope, b_use_style=True, b_train=B_TRAIN)
+    #st_attention_d_gx, st_latent_d_gx = memory(s_disc_gx, scope=DS_M_scope)
+    D_GX = decoder(latent_d_gx, s_disc_gx, norm='instance', scope=D_Decoder_scope, b_use_style=False, b_train=B_TRAIN)
 
     z_disc_x, s_disc_x = encoder(X_IN, norm='instance', scope=D_Encoder_scope, b_train=B_TRAIN)
     attention_d_x, latent_d_x = memory(z_disc_x, scope=D_M_scope)
-    st_attention_d_x, st_latent_d_x = memory(s_disc_x, scope=DS_M_scope)
-    D_X = decoder(latent_d_x, st_latent_d_x, norm='instance', scope=D_Decoder_scope, b_use_style=True, b_train=B_TRAIN)
+    #st_attention_d_x, st_latent_d_x = memory(s_disc_x, scope=DS_M_scope)
+    D_X = decoder(latent_d_x, s_disc_x, norm='instance', scope=D_Decoder_scope, b_use_style=False, b_train=B_TRAIN)
 
     config = tf.ConfigProto(allow_soft_placement=True)
     config.gpu_options.allow_growth = True
@@ -278,29 +279,27 @@ def train(model_path='None'):
     g_loss_gx_dgx = get_residual_loss(X_IN, D_GX, type='l1')
 
     # Simple Balance Mode
-    sigmoid_d_loss_gx_dgx = 1 - tf.nn.sigmoid(d_loss_gx_dgx)
-    sigmoid_g_loss_gx_dgx = tf.nn.sigmoid(d_loss_gx_dgx)
+    #sigmoid_d_loss_gx_dgx = 1 - tf.nn.sigmoid(d_loss_gx_dgx)
+    #sigmoid_g_loss_gx_dgx = tf.nn.sigmoid(d_loss_gx_dgx)
 
-    disc_loss = (d_loss_x_dx + sigmoid_d_loss_gx_dgx) + sparsity * get_residual_loss(attention_d_x, None,
-                                                                                       type='entropy') + \
-                sparsity * get_residual_loss(st_attention_d_x, None, type='entropy')
-    gen_loss = (g_loss_x_gx + sigmoid_g_loss_gx_dgx) + sparsity * get_residual_loss(attention_g, None,
-                                                                                            type='entropy') + \
-               sparsity * get_residual_loss(st_attention_g, None, type='entropy')
-
-    #slope = 2.0
-    #d_delta = 1.0 / (1.0 + 1.0 / tf.exp(slope * (d_loss_x_dx - d_loss_gx_dgx)))
-    #disc_loss = (d_loss_x_dx - d_delta * d_loss_gx_dgx) + sparsity * get_residual_loss(attention_d_x, None, type='entropy') + \
+    #disc_loss = (d_loss_x_dx + sigmoid_d_loss_gx_dgx) + sparsity * get_residual_loss(attention_d_x, None, type='entropy') + \
     #            sparsity * get_residual_loss(st_attention_d_x, None, type='entropy')
-    #gen_loss = (g_loss_x_gx + (1 - d_delta) * g_loss_gx_dgx) + sparsity * get_residual_loss(attention_g, None, type='entropy') + \
+    #gen_loss = (g_loss_x_gx + sigmoid_g_loss_gx_dgx) + sparsity * get_residual_loss(attention_g, None, type='entropy') + \
     #           sparsity * get_residual_loss(st_attention_g, None, type='entropy')
 
-    pretrain_disc_loss = d_loss_x_dx + sparsity * get_residual_loss(attention_d_x, None, type='entropy') + \
-                         sparsity * get_residual_loss(st_attention_d_x, None, type='entropy')
-    pretrain_gen_loss = g_loss_x_gx + sparsity * get_residual_loss(attention_g, None, type='entropy') + \
-                         sparsity * get_residual_loss(st_attention_g, None, type='entropy')
+    slope = 2.0
+    d_delta = 1.0 / (1.0 + 1.0 / tf.exp(slope * (d_loss_x_dx - d_loss_gx_dgx)))
+    disc_loss = (d_loss_x_dx - d_delta * d_loss_gx_dgx) + sparsity * get_residual_loss(attention_d_x, None, type='entropy')
+                #+ sparsity * get_residual_loss(st_attention_d_x, None, type='entropy')
+    gen_loss = (g_loss_x_gx + (1 - d_delta) * g_loss_gx_dgx) + sparsity * get_residual_loss(attention_g, None, type='entropy')
+               # + sparsity * get_residual_loss(st_attention_g, None, type='entropy')
 
-    anomaly_score = tf.maximum(calculate_anomaly_scores(X_IN, D_GX), calculate_anomaly_scores(X_IN, D_X))
+    pretrain_disc_loss = d_loss_x_dx #+ sparsity * get_residual_loss(attention_d_x, None, type='entropy') + \
+                         #sparsity * get_residual_loss(st_attention_d_x, None, type='entropy')
+    pretrain_gen_loss = g_loss_x_gx #+ sparsity * get_residual_loss(attention_g, None, type='entropy') + \
+                         #sparsity * get_residual_loss(st_attention_g, None, type='entropy')
+
+    anomaly_score = calculate_anomaly_scores(X_IN, D_GX)
 
     # Variable Define
     generator_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=G_Encoder_scope) + \
@@ -384,6 +383,9 @@ def calculate_anomaly_scores(imgs1, imgs2, pixel_max=1.0):
     X1 = imgs1
     X2 = imgs2
 
+    anomaly_score = tf.reduce_mean(tf.square(tf.subtract(X1, X2)), axis=[1, 2, 3])
+
+    '''
     if c > 1:
         X1 = tf.image.rgb_to_grayscale(X1)
         X2 = tf.image.rgb_to_grayscale(X2)
@@ -392,8 +394,8 @@ def calculate_anomaly_scores(imgs1, imgs2, pixel_max=1.0):
         X1 = tf.image.resize_images(X1, (255, 255))
         X2 = tf.image.resize_images(X2, (255, 255))
 
-    #anomaly_score = 1 - tf.image.ssim_multiscale(X1, X2, pixel_max)
-    anomaly_score = tf.reduce_sum(tf.square(tf.subtract(X1, X2)), axis=[1, 2, 3])
+    anomaly_score = 1 - tf.image.ssim_multiscale(X1, X2, pixel_max)
+    '''
 
     return anomaly_score
 
@@ -465,10 +467,10 @@ if __name__ == '__main__':
     parser.add_argument('--test_data', type=str, help='test data directory', default='data/train/cat')
     parser.add_argument('--out_dir', type=str, help='output directory', default='imgs')
     parser.add_argument('--img_size', type=int, help='training image size', default=32)
-    parser.add_argument('--epoch', type=int, help='num epoch', default=100)
+    parser.add_argument('--epoch', type=int, help='num epoch', default=300)
     parser.add_argument('--batch_size', type=int, help='Training batch size', default=16)
-    parser.add_argument('--alpha', type=int, help='AE loss weight', default=1)
-    parser.add_argument('--pretrain', type=int, help='Number of pretrain epoch', default=1)
+    parser.add_argument('--alpha', type=int, help='AE loss weight', default=10)
+    parser.add_argument('--pretrain', type=int, help='Number of pretrain epoch', default=0)
 
     args = parser.parse_args()
 
@@ -485,7 +487,7 @@ if __name__ == '__main__':
     num_epoch_pretrain = args.pretrain
 
     unit_block_depth = 32
-    downsample_num = int(np.log2(input_width // 16))
+    downsample_num = int(np.log2(input_width // 8))
     upsample_num = downsample_num
     bottleneck_num = 6
     query_dimension = 128
