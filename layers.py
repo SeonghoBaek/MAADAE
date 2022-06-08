@@ -158,8 +158,8 @@ def coord_conv(input, scope, filter_dims, stride_dims, padding='SAME',
     return conv(coord_tensor, scope, filter_dims, stride_dims, padding, non_linear_fn, dilation, bias, sn)
 
 
-def conv(input, scope, filter_dims, stride_dims, padding='SAME',
-         non_linear_fn=tf.nn.relu, dilation=[1, 1, 1, 1], bias=False, sn=False):
+def conv(input, scope, filter_dims, stride_dims, padding='SAME', pad=0,
+         non_linear_fn=tf.nn.relu, dilation=[1, 1, 1, 1], bias=True, sn=False):
     input_dims = input.get_shape().as_list()
 
     assert (len(input_dims) == 4)  # batch_size, height, width, num_channels_in
@@ -191,7 +191,17 @@ def conv(input, scope, filter_dims, stride_dims, padding='SAME',
         if sn == True:
             conv_filter = spectral_norm(conv_weight, scope='sn')
 
-        map = tf.nn.conv2d(input, filter=conv_filter, strides=[1, stride_h, stride_w, 1], padding=padding, dilations=dilation)
+        x = input
+
+        if padding == 'ZERO':
+            x = tf.pad(x, [[0, 0], [pad, pad], [pad, pad], [0, 0]])
+            padding = 'VALID'
+
+        if padding == 'REFL':
+            x = tf.pad(x, [[0, 0], [pad, pad], [pad, pad], [0, 0]], mode='REFLECT')
+            padding = 'VALID'
+
+        map = tf.nn.conv2d(x, filter=conv_filter, strides=[1, stride_h, stride_w, 1], padding=padding, dilations=dilation)
 
         if bias is True:
             map = tf.nn.bias_add(map, conv_bias)
@@ -211,6 +221,7 @@ def blur_pooling2d(input, kernel_size=3, strides=[1, 2, 2, 1], scope='blur_pooli
 
     kernel_w = kernel_size
     kernel_h = kernel_size
+    pad = 0
 
     if kernel_size == 5:
         # Laplacian
@@ -219,12 +230,15 @@ def blur_pooling2d(input, kernel_size=3, strides=[1, 2, 2, 1], scope='blur_pooli
                            [6, 24, 36, 24, 6],
                            [4, 16, 24, 16, 4],
                            [1, 4, 6, 4, 1]]).astype('float32')
+        pad = 2
     elif kernel_size == 3:
         # Bilinear
         kernel = np.array([[1., 2., 1.], [2., 4., 2.], [1., 2., 1.]]).astype('float32')
+        pad = 1
     else:
         # 2. Nearest Neighbour
         kernel = np.array([[1., 1.], [1., 1.]]).astype('float32')
+        pad = 0
 
     kernel = kernel / np.sum(kernel)
 
@@ -238,7 +252,17 @@ def blur_pooling2d(input, kernel_size=3, strides=[1, 2, 2, 1], scope='blur_pooli
                                         initializer=filter_init,
                                         trainable=False)
 
-        map = tf.nn.depthwise_conv2d(input, filter=filter_weight, strides=strides, padding=padding)
+        x = input
+
+        if padding == 'ZERO':
+            x = tf.pad(x, [[0, 0], [pad, pad], [pad, pad], [0, 0]])
+            padding = 'VALID'
+
+        if padding == 'REFL':
+            x = tf.pad(x, [[0, 0], [pad, pad], [pad, pad], [0, 0]], mode='REFLECT')
+            padding = 'VALID'
+
+        map = tf.nn.depthwise_conv2d(x, filter=filter_weight, strides=strides, padding=padding)
 
         return map
 
@@ -280,11 +304,11 @@ def add_dense_layer(layer, filter_dims, act_func=tf.nn.relu, scope='dense_layer'
 
 
 def add_residual_layer(layer, filter_dims, act_func=tf.nn.relu, scope='residual_layer',
-                       norm='layer', b_train=False, use_bias=False, dilation=[1, 1, 1, 1], sn=False):
+                       norm='layer', b_train=False, use_bias=True, dilation=[1, 1, 1, 1], sn=False, padding='SAME', pad=0):
     with tf.variable_scope(scope, reuse=tf.AUTO_REUSE):
         l = layer
         l = conv(l, scope='conv', filter_dims=filter_dims, stride_dims=[1, 1],
-                 dilation=dilation, non_linear_fn=None, bias=use_bias, sn=sn)
+                 dilation=dilation, non_linear_fn=None, bias=use_bias, sn=sn, padding=padding, pad=pad)
 
         if norm is not 'None':
             l = conv_normalize(l, norm=norm, b_train=b_train, scope='norm')
@@ -319,23 +343,23 @@ def global_avg_pool(input_data, output_length=1, padding='VALID', use_bias=False
     height = input_dims[1]
     width = input_dims[2]
 
+    l = input_data
+
     with tf.variable_scope(scope, reuse=tf.AUTO_REUSE):
         if num_channels_in != output_length:
             conv_weight = tf.get_variable('gap_weight', shape=[1, 1, num_channels_in, output_length],
                                           initializer=tf.truncated_normal_initializer(stddev=1.0))
 
-            conv = tf.nn.conv2d(input_data, conv_weight, strides=[1, 1, 1, 1], padding='SAME')
+            l = tf.nn.conv2d(l, conv_weight, strides=[1, 1, 1, 1], padding='SAME')
 
             if use_bias == True:
                 conv_bias = tf.get_variable('gap_bias', shape=[output_length], initializer=tf.zeros_initializer)
-                conv = tf.nn.bias_add(conv, conv_bias)
+                l = tf.nn.bias_add(l, conv_bias)
 
-            pool = tf.nn.avg_pool(conv, ksize=[1, height, width, 1], strides=[1, 1, 1, 1], padding=padding)
-        else:
-            pool = tf.nn.avg_pool(input_data, ksize=[1, height, width, 1], strides=[1, 1, 1, 1], padding=padding)
+        pool = tf.reduce_mean(l, axis=[1, 2])
 
-        if output_length != 1:
-            pool = tf.squeeze(pool, axis=[1, 2])
+        #if output_length != 1:
+        #    pool = tf.squeeze(pool, axis=[1, 2])
 
         return pool
 
@@ -550,26 +574,14 @@ def instance_norm(x, scope="instance_norm", alpha_start=1.0, bias_start=0.0, num
     return y
 
 
-def AdaIN(x, s, scope="adain", num_grp=4):
+def AdaIN(x, s_mu, s_var, scope="adain"):
     with tf.variable_scope(scope, reuse=tf.AUTO_REUSE):
-        print(scope + ' AdaIN Normalization')
-        input_dims = x.get_shape().as_list()
-        h = input_dims[1]
-        w = input_dims[2]
-        c = input_dims[3]
         eps = 1e-5
-        g_c = c // num_grp
-        x = tf.reshape(x, shape=[-1, num_grp, g_c, h, w])
 
-        mean, var = tf.nn.moments(x, [2, 3, 4], keep_dims=True)
+        mean, var = tf.nn.moments(x, [1, 2], keep_dims=True)
+        #print('adaIN ' + str(mean.get_shape().as_list()))
 
-        alpha = fc(s, 1, non_linear_fn=tf.nn.tanh, scope='s1', use_bias=True)
-        alpha = tf.reshape(alpha, shape=[-1, 1, 1, 1, 1])
-        beta = fc(s, 1, non_linear_fn=tf.nn.tanh, scope='s2', use_bias=True)
-        beta = tf.reshape(beta, shape=[-1, 1, 1, 1, 1])
-
-        x = alpha * (x - mean) * tf.rsqrt(var + eps) + beta
-        x = tf.reshape(x, [-1, h, w, c])
+        x = s_mu * (x - mean) * tf.rsqrt(var + eps) + s_var
 
     return x
 
@@ -619,8 +631,23 @@ def add_residual_dense_block(in_layer, filter_dims, num_layers, act_func=tf.nn.r
         return l
 
 
-def add_se_adain_residual_block(in_layer, scale_param, filter_dims, act_func=tf.nn.relu,
-                                scope='se_adain_residual_block', use_dilation=False):
+def se_block(input, scope='squeeze_excitation'):
+    with tf.variable_scope(scope, reuse=tf.AUTO_REUSE):
+        num_channel_out = input.get_shape()[-1]
+        l = input
+        sl = global_avg_pool(l, output_length=num_channel_out, scope='squeeze')
+        sl = fc(sl, out_dim=num_channel_out // 8, non_linear_fn=tf.nn.leaky_relu, scope='reduction')
+        sl = fc(sl, out_dim=num_channel_out, non_linear_fn=tf.nn.sigmoid, scope='transform')
+        # Excitation
+        sl = tf.expand_dims(sl, axis=1)
+        sl = tf.expand_dims(sl, axis=2)
+        l = tf.multiply(l, sl)
+
+        return l
+
+
+def add_se_adain_residual_block(in_layer, style_mu, style_var, filter_dims, act_func=tf.nn.relu,
+                                scope='se_adain_residual_block', use_dilation=False, padding='SAME', pad=0):
     with tf.variable_scope(scope, reuse=tf.AUTO_REUSE):
         l = in_layer
         num_channel_out = filter_dims[-1]
@@ -629,11 +656,13 @@ def add_se_adain_residual_block(in_layer, scale_param, filter_dims, act_func=tf.
         if use_dilation is True:
             dilation = [1, 2, 2, 1]
 
-        bn_depth = num_channel_out
+        l = conv(l, scope='se_adain_res_conv', filter_dims=[filter_dims[0], filter_dims[1], num_channel_out], stride_dims=[1, 1],
+                 dilation=dilation, non_linear_fn=act_func, bias=True, padding=padding, pad=pad)
+        l = AdaIN(l, style_mu, style_var, scope='residual_adain1')
 
-        l = conv(l, scope='se_adain_res_conv', filter_dims=[filter_dims[0], filter_dims[1], bn_depth], stride_dims=[1, 1],
-                 dilation=dilation, non_linear_fn=None, bias=False)
-        l = AdaIN(l, scale_param, scope='residual_adain')
+        l = conv(l, scope='se_adain_res_conv', filter_dims=[filter_dims[0], filter_dims[1], num_channel_out], stride_dims=[1, 1],
+                 dilation=dilation, non_linear_fn=None, bias=True, padding=padding, pad=pad)
+        l = AdaIN(l, style_mu, style_var, scope='residual_adain2')
 
         # SE Path
         # Squeeze
@@ -652,7 +681,7 @@ def add_se_adain_residual_block(in_layer, scale_param, filter_dims, act_func=tf.
 
 def add_se_residual_block(in_layer, filter_dims, act_func=tf.nn.relu, norm='layer',
                        b_train=False, use_residual=True, scope='residual_block', use_dilation=False,
-                       sn=False, use_bottleneck=False):
+                       sn=False, use_bottleneck=False, padding='SAME', pad=0):
     with tf.variable_scope(scope, reuse=tf.AUTO_REUSE):
         l = in_layer
         input_dims = in_layer.get_shape().as_list()
@@ -675,8 +704,11 @@ def add_se_residual_block(in_layer, filter_dims, act_func=tf.nn.relu, norm='laye
         else:
             bn_depth = num_channel_out
 
-        l = add_residual_layer(l, filter_dims=[filter_dims[0], filter_dims[1], bn_depth], act_func=None, norm=norm, b_train=b_train,
-                               scope='residual_layer', dilation=dilation, sn=sn)
+        l = add_residual_layer(l, filter_dims=[filter_dims[0], filter_dims[1], bn_depth], act_func=act_func, norm=norm, b_train=b_train,
+                               scope='residual_layer1', dilation=dilation, sn=sn, padding=padding, pad=pad)
+
+        l = add_residual_layer(l, filter_dims=[filter_dims[0], filter_dims[1], bn_depth], act_func=None, norm=norm,
+                               b_train=b_train, scope='residual_layer2', dilation=dilation, sn=sn, padding=padding, pad=pad)
 
         if use_bottleneck is True:
             l = act_func(l)
