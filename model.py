@@ -133,7 +133,8 @@ def encoder(in_tensor, activation=tf.nn.relu, norm='batch', b_use_style=False, s
                 block_depth = block_depth + unit_block_depth
                 s = layers.conv(s, scope='style_downsapmple_' + str(i), filter_dims=[1, 1, block_depth],
                                 stride_dims=[1, 1], non_linear_fn=None, bias=False)
-                s = layers.conv_normalize(s, norm='batch', b_train=b_train, scope='style_norm_' + str(i))
+                # Bad for style extraction
+                #s = layers.conv_normalize(s, norm='batch', b_train=b_train, scope='style_norm_' + str(i))
                 s = layers.se_block(s, scope='style_se_block_' + str(i))
                 s = activation(s)
 
@@ -233,7 +234,16 @@ def memory(query, scope='aug_mem'):
         print(scope + ' norm_q: ' + str(norm_q.get_shape().as_list()))
         norm_mem = tf.nn.l2_normalize(aug_mem, axis=0)
         print(scope + ' norm mem: ' + str(norm_mem.get_shape().as_list()))
+
         distance = tf.matmul(norm_q, norm_mem, transpose_b=True)  # [B, Q]
+
+        # Adaptive Scaling
+        s = layers.fc(query, aug_mem_size, non_linear_fn=tf.nn.relu, scope='mem_linear1', use_bias=True)
+        scale_alpha = layers.fc(s, aug_mem_size, non_linear_fn=None, scope='mem_linear_alpha', use_bias=True)
+        scale_beta = layers.fc(s, aug_mem_size, non_linear_fn=None, scope='mem_linear_beta', use_bias=True)
+
+        distance = scale_alpha * distance + scale_beta  # [B, Q]
+
         sm = tf.nn.softmax(distance, axis=-1)  # [B, Q]
         print(scope + ' softmax: ' + str(sm.get_shape().as_list()))
         threashold = tf.constant(1/aug_mem_size, dtype=tf.float32)
@@ -352,7 +362,7 @@ def train(model_path='None'):
         total_input_size = len(tr_files)
         total_steps = (total_input_size * num_epoch * 1.0)
         cur_step = 0
-        warmup_epoch = 10 # num_epoch // 10
+        warmup_epoch = 10
 
         for e in range(num_epoch):
             tr_files = shuffle(tr_files)
@@ -456,7 +466,6 @@ def test(model_path):
         D_X = decoder(latent_d_x, s_disc_x, norm='instance', scope=D_Decoder_scope, b_use_style=use_style, b_train=B_TRAIN)
 
     anomaly_score = calculate_anomaly_scores(X_IN, D_GX)
-    #anomaly_score = tf.maximum(calculate_anomaly_scores(X_IN, D_GX), calculate_anomaly_scores(X_IN, D_X))
 
     # tf.image.rgb_to_grayscale
     config = tf.ConfigProto(allow_soft_placement=True)
@@ -500,7 +509,7 @@ if __name__ == '__main__':
     parser.add_argument('--test_data', type=str, help='test data directory', default='data/test')
     parser.add_argument('--out_dir', type=str, help='output directory', default='imgs')
     parser.add_argument('--img_size', type=int, help='training image size', default=512)
-    parser.add_argument('--epoch', type=int, help='num epoch', default=300)
+    parser.add_argument('--epoch', type=int, help='num epoch', default=1000)
     parser.add_argument('--batch_size', type=int, help='Training batch size', default=16)
     parser.add_argument('--alpha', type=int, help='AE loss weight', default=10)
 
@@ -530,9 +539,3 @@ if __name__ == '__main__':
     use_style = True
     use_style_mem = True
 
-    if mode == 'train':
-        train(model_path)
-    elif mode == 'test':
-        test(model_path)
-    else:
-        print('Train or Test?')
