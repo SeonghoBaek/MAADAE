@@ -553,13 +553,23 @@ def layer_norm(x, scope="layer_norm", alpha_start=1.0, bias_start=0.0):
     return y
 
 
-def instance_norm(x, scope="instance_norm", alpha_start=1.0, bias_start=0.0, num_grp=4):
+def instance_norm(x, scope="instance_norm", alpha_start=1.0, bias_start=0.0):
     with tf.variable_scope(scope, reuse=tf.AUTO_REUSE):
         input_dims = x.get_shape().as_list()
         h = input_dims[1]
         w = input_dims[2]
         c = input_dims[3]
         eps = 1e-5
+
+        mean, var = tf.nn.moments(x, [1, 2], keep_dims=True)
+        alpha = tf.get_variable('alpha', shape=[1, 1, 1, c], dtype=tf.float32,
+                                initializer=tf.random_normal_initializer(alpha_start, 0.02, dtype=tf.float32))
+        bias = tf.get_variable('bias', [1, 1, 1, c],
+                               initializer=tf.constant_initializer(bias_start), dtype=tf.float32)
+        x = (x - mean) * tf.rsqrt(var + eps)
+        y = alpha * x + bias
+
+        '''
         g_c = c // num_grp
         x = tf.reshape(x, shape=[-1, num_grp, g_c, h, w])
         mean, var = tf.nn.moments(x, [2, 3, 4], keep_dims=True)
@@ -570,6 +580,7 @@ def instance_norm(x, scope="instance_norm", alpha_start=1.0, bias_start=0.0, num
         x = (x - mean) * tf.rsqrt(var + eps)
         x = tf.reshape(x, [-1, h, w, c])
         y = alpha * x + bias
+        '''
 
     return y
 
