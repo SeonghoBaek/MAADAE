@@ -181,8 +181,8 @@ def decoder(content, style, activation=tf.nn.relu, norm='batch', scope='decoder'
         block_depth = unit_block_depth + (unit_block_depth * upsample_num)
 
         # Update by image size for your own.
-        l = layers.fc(l, decoder_int_filter_size * decoder_int_filter_size, non_linear_fn=activation, scope='fc1', use_bias=True)
-        l = tf.reshape(l, shape=[-1, decoder_int_filter_size, decoder_int_filter_size, 1])
+        #l = layers.fc(l, decoder_int_filter_size * decoder_int_filter_size, non_linear_fn=activation, scope='fc1', use_bias=True)
+        l = tf.reshape(l, shape=[-1, decoder_int_filter_size, decoder_int_filter_size, 8])
         l = layers.conv(l, scope='init', filter_dims=[3, 3, block_depth],
                         stride_dims=[1, 1], non_linear_fn=activation, padding='REFL', pad=1)
 
@@ -218,7 +218,7 @@ def decoder(content, style, activation=tf.nn.relu, norm='batch', scope='decoder'
             print(scope + ' Upsampling ' + str(i) + ': ' + str(l.get_shape().as_list()))
 
         l = layers.conv(l, scope='last', filter_dims=[3, 3, num_channel], stride_dims=[1, 1],
-                        non_linear_fn=None, padding='REFL', pad=1)
+                        non_linear_fn=tf.nn.sigmoid, padding='REFL', pad=1)
 
         print(scope + ' Output: ' + str(l.get_shape().as_list()))
     return l
@@ -305,7 +305,7 @@ def train(model_path='None'):
     learning_rate = 2e-4
 
     # Loss Define
-    sparsity = 1e-5
+    sparsity = 2e-4
 
     d_loss_x_dx = get_residual_loss(X_IN, D_X, type='l1', gamma=alpha)
     d_loss_gx_dgx = get_residual_loss(G_X, D_GX, type='l1')
@@ -316,35 +316,40 @@ def train(model_path='None'):
     sigmoid_d_loss_gx_dgx = 1 - tf.nn.sigmoid(d_loss_gx_dgx)
     sigmoid_g_loss_gx_dgx = tf.nn.sigmoid(d_loss_gx_dgx)
 
-    disc_loss = (d_loss_x_dx - sigmoid_d_loss_gx_dgx * d_loss_gx_dgx) + sparsity * get_residual_loss(attention_d_x, None, type='entropy')
-    gen_loss = (g_loss_x_gx + sigmoid_g_loss_gx_dgx * g_loss_gx_dgx) + sparsity * get_residual_loss(attention_g, None, type='entropy')
+    disc_loss = (d_loss_x_dx - sigmoid_d_loss_gx_dgx * d_loss_gx_dgx)
+    gen_loss = (g_loss_x_gx + sigmoid_g_loss_gx_dgx * g_loss_gx_dgx)
+    sparsity_reg_loss = sparsity * (get_residual_loss(attention_d_x, None, type='entropy') + get_residual_loss(attention_g, None, type='entropy'))
 
     #slope = 2.0
     #d_delta = 1.0 / (1.0 + 1.0 / tf.exp(slope * (d_loss_x_dx - d_loss_gx_dgx)))
     #disc_loss = d_loss_x_dx - d_delta * d_loss_gx_dgx + sparsity * get_residual_loss(attention_d_x, None, type='entropy')
 
     if use_style_mem is True:
-        disc_loss = disc_loss + sparsity * get_residual_loss(st_attention_d_x, None, type='entropy')
+        sparsity_reg_loss = sparsity_reg_loss + sparsity * get_residual_loss(st_attention_d_x, None, type='entropy')
 
     #gen_loss = g_loss_x_gx + (1 - d_delta) * g_loss_gx_dgx + sparsity * get_residual_loss(attention_g, None, type='entropy')
 
     if use_style_mem is True:
-        gen_loss = gen_loss + sparsity * get_residual_loss(st_attention_g, None, type='entropy')
+        sparsity_reg_loss = sparsity_reg_loss + sparsity * get_residual_loss(st_attention_g, None, type='entropy')
 
     # Variable Define
     generator_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=G_Encoder_scope) + \
-                     tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=G_Decoder_scope) + \
-                     tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=G_M_scope) + \
-                     tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=GS_M_scope)
+                     tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=G_Decoder_scope)
 
     discriminator_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=D_Encoder_scope) + \
-                         tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=D_Decoder_scope) + \
-                         tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=D_M_scope) + \
-                         tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=DS_M_scope)
+                         tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=D_Decoder_scope)
+
+    memory_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=G_M_scope) +\
+                  tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=GS_M_scope) +\
+                  tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=D_M_scope) +\
+                  tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=DS_M_scope)
+
+    sparsity_reg_vars = [v for v in memory_vars if 'mem_vars' in v.name]
 
     # Optimizer
     discriminator_optimizer = tf.train.AdamOptimizer(learning_rate=LR).minimize(disc_loss, var_list=discriminator_vars)
     generator_optimizer = tf.train.AdamOptimizer(learning_rate=LR).minimize(gen_loss, var_list=generator_vars)
+    sparsity_reg_optimizer = tf.train.AdamOptimizer(learning_rate=LR).minimize(sparsity_reg_loss, var_list=sparsity_reg_vars)
 
     with tf.Session(config=config) as sess:
         sess.run(tf.global_variables_initializer())
@@ -386,6 +391,7 @@ def train(model_path='None'):
 
                 _, d_loss, d_x_imgs, d_x_dx, d_gx_dgx = sess.run([discriminator_optimizer, disc_loss, D_X, d_loss_x_dx, d_loss_gx_dgx], feed_dict={X_IN: batch_imgs, LR: lr, B_TRAIN: True})
                 _, g_loss, g_x_imgs, g_x_gx = sess.run([generator_optimizer, gen_loss, G_X, g_loss_x_gx], feed_dict={X_IN: batch_imgs, LR: lr, B_TRAIN: True})
+                _, sess.run([sparsity_reg_optimizer], feed_dict={X_IN: batch_imgs, LR: lr, B_TRAIN: True})
 
                 print('epoch: ' + str(e) + ', ' +
                       'd_loss: ' + str(d_loss) + ', d_x_dx: ' + str(d_x_dx) + ', d_gx_dgx: ' + str(d_gx_dgx) +
@@ -527,7 +533,7 @@ if __name__ == '__main__':
     alpha = args.alpha
 
     unit_block_depth = 32
-    decoder_int_filter_size = 16
+    decoder_int_filter_size = 4
     downsample_num = int(np.log2(input_width // decoder_int_filter_size))
     upsample_num = downsample_num
     bottleneck_num = 4
@@ -539,3 +545,9 @@ if __name__ == '__main__':
     use_style = True
     use_style_mem = True
 
+    if mode == 'train':
+        train(model_path)
+    elif mode == 'test':
+        test(model_path)
+    else:
+        print('Train or Test?')
