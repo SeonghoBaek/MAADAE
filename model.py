@@ -545,7 +545,7 @@ if __name__ == '__main__':
     use_style = True
     use_style_mem = True
     
-     if mode == 'train':
+    if mode == 'train':
         train(model_path)
     elif mode == 'test':
         test(model_path)
