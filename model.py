@@ -544,6 +544,13 @@ if __name__ == '__main__':
     num_channel = 3
     use_style = True
     use_style_mem = True
+    
+     if mode == 'train':
+        train(model_path)
+    elif mode == 'test':
+        test(model_path)
+    else:
+        print('Train or Test?')
 
     if mode == 'train':
         train(model_path)
