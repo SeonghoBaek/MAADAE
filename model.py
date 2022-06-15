@@ -123,10 +123,12 @@ def encoder(in_tensor, activation=tf.nn.relu, norm='batch', b_use_style=False, s
         block_depth = unit_block_depth
 
         if b_use_style is True:
-            s = layers.conv(in_tensor, scope='style_init', filter_dims=[7, 7, block_depth],
-                            stride_dims=[1, 1], non_linear_fn=activation, padding='REFL', pad=3)
+            s = layers.conv(in_tensor, scope='style_init', filter_dims=[4, 4, block_depth],
+                            stride_dims=[4, 4], non_linear_fn=activation, padding='REFL', pad=1)
 
-            for i in range(downsample_num):
+            enc_dn_num = downsample_num - 2
+
+            for i in range(enc_dn_num):
                 s = layers.blur_pooling2d(s, kernel_size=5, scope='style_blur_' + str(i), padding='REFL')
                 print(scope + 'Style Blur Pooling Block ' + str(i) + ': ' + str(s.get_shape().as_list()))
 
@@ -134,7 +136,7 @@ def encoder(in_tensor, activation=tf.nn.relu, norm='batch', b_use_style=False, s
                 s = layers.conv(s, scope='style_downsapmple_' + str(i), filter_dims=[1, 1, block_depth],
                                 stride_dims=[1, 1], non_linear_fn=None, bias=False)
                 # Bad for style extraction
-                #s = layers.conv_normalize(s, norm='batch', b_train=b_train, scope='style_norm_' + str(i))
+                # s = layers.conv_normalize(s, norm='batch', b_train=b_train, scope='style_norm_' + str(i))
                 s = layers.se_block(s, scope='style_se_block_' + str(i))
                 s = activation(s)
 
@@ -144,11 +146,13 @@ def encoder(in_tensor, activation=tf.nn.relu, norm='batch', b_use_style=False, s
         else:
             style_query = None
 
-        l = layers.conv(in_tensor, scope='contents_init', filter_dims=[3, 3, block_depth],
-                        stride_dims=[1, 1], non_linear_fn=activation, padding='REFL', pad=1)
+        l = layers.conv(in_tensor, scope='contents_init', filter_dims=[4, 4, block_depth],
+                        stride_dims=[4, 4], non_linear_fn=activation, padding='REFL', pad=1)
+
+        enc_dn_num = downsample_num - 2
 
         # Downsample stage.
-        for i in range(downsample_num):
+        for i in range(enc_dn_num):
             l = layers.blur_pooling2d(l, kernel_size=5, scope='blur_' + str(i), padding='REFL')
             print(scope + ' Blur Pooling Block ' + str(i) + ': ' + str(l.get_shape().as_list()))
 
@@ -164,8 +168,8 @@ def encoder(in_tensor, activation=tf.nn.relu, norm='batch', b_use_style=False, s
         # Bottleneck stage
         for i in range(bottleneck_num):
             print(scope + ' Bottleneck Block : ' + str(l.get_shape().as_list()))
-            l = layers.add_se_residual_block(l, filter_dims=[3, 3, block_depth], act_func=activation,
-                                             norm=norm, b_train=b_train, use_dilation=False, scope='bt_block_' + str(i), padding='REFL', pad=1)
+            l = layers.add_se_residual_block(l, filter_dims=[7, 7, block_depth], act_func=activation,
+                                             norm=norm, b_train=b_train, use_dilation=False, scope='bt_block_' + str(i), padding='REFL', pad=3)
 
         l = layers.global_avg_pool(l, query_dimension, scope='gap')
         print(scope + ' z dimension : ' + str(l.get_shape().as_list()))
@@ -181,14 +185,14 @@ def decoder(content, style, activation=tf.nn.relu, norm='batch', scope='decoder'
         block_depth = unit_block_depth + (unit_block_depth * upsample_num)
 
         # Update by image size for your own.
-        #l = layers.fc(l, decoder_int_filter_size * decoder_int_filter_size, non_linear_fn=activation, scope='fc1', use_bias=True)
-        l = tf.reshape(l, shape=[-1, decoder_int_filter_size, decoder_int_filter_size, 8])
-        l = layers.conv(l, scope='init', filter_dims=[3, 3, block_depth],
-                        stride_dims=[1, 1], non_linear_fn=activation, padding='REFL', pad=1)
+        l = layers.fc(l, decoder_int_filter_size * decoder_int_filter_size, non_linear_fn=activation, scope='fc1', use_bias=True)
+        l = tf.reshape(l, shape=[-1, decoder_int_filter_size, decoder_int_filter_size, 1])
+        l = layers.conv(l, scope='init', filter_dims=[3, 3, block_depth], stride_dims=[1, 1], non_linear_fn=activation, padding='REFL', pad=1)
 
         # Bottleneck stage
         if b_use_style is True:
             s = layers.fc(style, block_depth, non_linear_fn=activation, scope='style_linear1', use_bias=True)
+            s = layers.fc(s, block_depth, non_linear_fn=activation, scope='style_linear2', use_bias=True)
             style_mu = layers.fc(s, block_depth, non_linear_fn=None, scope='style_mu')
             style_var = layers.fc(s, block_depth, non_linear_fn=None, scope='style_var')
             style_mu = tf.reshape(style_mu, shape=[-1, 1, 1, block_depth])
@@ -196,11 +200,11 @@ def decoder(content, style, activation=tf.nn.relu, norm='batch', scope='decoder'
 
         for i in range(bottleneck_num):
             if b_use_style is True:
-                l = layers.add_se_adain_residual_block(l, style_mu, style_var, filter_dims=[3, 3, block_depth], act_func=activation,
-                                                       use_dilation=False, scope=scope + '_bt_block_' + str(i), padding='REFL', pad=1)
+                l = layers.add_se_adain_residual_block(l, style_mu, style_var, filter_dims=[7, 7, block_depth], act_func=activation,
+                                                       use_dilation=False, scope=scope + '_bt_block_' + str(i), padding='REFL', pad=3)
             else:
-                l = layers.add_se_residual_block(l, filter_dims=[3, 3, block_depth], act_func=activation,
-                                                 norm=norm, b_train=b_train, use_dilation=False, scope='bt_block_' + str(i), padding='REFL', pad=1)
+                l = layers.add_se_residual_block(l, filter_dims=[7, 7, block_depth], act_func=activation,
+                                                 norm=norm, b_train=b_train, use_dilation=False, scope='bt_block_' + str(i), padding='REFL', pad=3)
 
             print(scope + ' Bottleneck Block : ' + str(l.get_shape().as_list()))
 
@@ -238,10 +242,10 @@ def memory(query, scope='aug_mem'):
         distance = tf.matmul(norm_q, norm_mem, transpose_b=True)  # [B, Q]
 
         # Adaptive Scaling
-        s = layers.fc(query, aug_mem_size, non_linear_fn=tf.nn.relu, scope='mem_linear1', use_bias=True)
-        scale_alpha = layers.fc(s, aug_mem_size, non_linear_fn=None, scope='mem_linear_alpha', use_bias=True)
-        scale_beta = layers.fc(s, aug_mem_size, non_linear_fn=None, scope='mem_linear_beta', use_bias=True)
-
+        s = layers.fc(query, 2*representation_dimension, non_linear_fn=tf.nn.relu, scope='mem_linear1', use_bias=True)
+        scale_alpha = layers.fc(s, aug_mem_size, non_linear_fn=tf.nn.sigmoid, scope='mem_linear_alpha', use_bias=True)
+        scale_beta = layers.fc(s, aug_mem_size, non_linear_fn=tf.nn.sigmoid, scope='mem_linear_beta', use_bias=True)
+        
         distance = scale_alpha * distance + scale_beta  # [B, Q]
 
         sm = tf.nn.softmax(distance, axis=-1)  # [B, Q]
@@ -313,35 +317,34 @@ def train(model_path='None'):
     g_loss_gx_dgx = get_residual_loss(G_X, D_GX, type='l1')
 
     # Simple Balance Mode
-    sigmoid_d_loss_gx_dgx = 1 - tf.nn.sigmoid(d_loss_gx_dgx)
-    sigmoid_g_loss_gx_dgx = tf.nn.sigmoid(d_loss_gx_dgx)
+    sigmoid_d_loss_gx_dgx = 1 - layers.sigmoid(d_loss_gx_dgx, slope=10.0)
+    sigmoid_g_loss_gx_dgx = layers.sigmoid(d_loss_gx_dgx)
 
-    disc_loss = (d_loss_x_dx - sigmoid_d_loss_gx_dgx * d_loss_gx_dgx)
-    gen_loss = (g_loss_x_gx + sigmoid_g_loss_gx_dgx * g_loss_gx_dgx)
+    disc_loss = d_loss_x_dx - sigmoid_d_loss_gx_dgx * d_loss_gx_dgx
+    gen_loss = g_loss_x_gx + sigmoid_g_loss_gx_dgx * g_loss_gx_dgx
+
     sparsity_reg_loss = sparsity * (get_residual_loss(attention_d_x, None, type='entropy') + get_residual_loss(attention_g, None, type='entropy'))
-
-    #slope = 2.0
-    #d_delta = 1.0 / (1.0 + 1.0 / tf.exp(slope * (d_loss_x_dx - d_loss_gx_dgx)))
-    #disc_loss = d_loss_x_dx - d_delta * d_loss_gx_dgx + sparsity * get_residual_loss(attention_d_x, None, type='entropy')
 
     if use_style_mem is True:
         sparsity_reg_loss = sparsity_reg_loss + sparsity * get_residual_loss(st_attention_d_x, None, type='entropy')
-
-    #gen_loss = g_loss_x_gx + (1 - d_delta) * g_loss_gx_dgx + sparsity * get_residual_loss(attention_g, None, type='entropy')
 
     if use_style_mem is True:
         sparsity_reg_loss = sparsity_reg_loss + sparsity * get_residual_loss(st_attention_g, None, type='entropy')
 
     # Variable Define
     generator_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=G_Encoder_scope) + \
-                     tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=G_Decoder_scope)
+                     tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=G_Decoder_scope) + \
+                     tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=G_M_scope) + \
+                     tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=GS_M_scope)
 
     discriminator_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=D_Encoder_scope) + \
-                         tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=D_Decoder_scope)
+                         tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=D_Decoder_scope) + \
+                         tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=D_M_scope) + \
+                         tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=DS_M_scope)
 
-    memory_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=G_M_scope) +\
-                  tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=GS_M_scope) +\
-                  tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=D_M_scope) +\
+    memory_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=G_M_scope) + \
+                  tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=GS_M_scope) + \
+                  tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=D_M_scope) + \
                   tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=DS_M_scope)
 
     sparsity_reg_vars = [v for v in memory_vars if 'mem_vars' in v.name]
@@ -391,7 +394,7 @@ def train(model_path='None'):
 
                 _, d_loss, d_x_imgs, d_x_dx, d_gx_dgx = sess.run([discriminator_optimizer, disc_loss, D_X, d_loss_x_dx, d_loss_gx_dgx], feed_dict={X_IN: batch_imgs, LR: lr, B_TRAIN: True})
                 _, g_loss, g_x_imgs, g_x_gx = sess.run([generator_optimizer, gen_loss, G_X, g_loss_x_gx], feed_dict={X_IN: batch_imgs, LR: lr, B_TRAIN: True})
-                _, sess.run([sparsity_reg_optimizer], feed_dict={X_IN: batch_imgs, LR: lr, B_TRAIN: True})
+                _ = sess.run([sparsity_reg_optimizer], feed_dict={X_IN: batch_imgs, LR: lr, B_TRAIN: True})
 
                 print('epoch: ' + str(e) + ', ' +
                       'd_loss: ' + str(d_loss) + ', d_x_dx: ' + str(d_x_dx) + ', d_gx_dgx: ' + str(d_gx_dgx) +
@@ -533,24 +536,17 @@ if __name__ == '__main__':
     alpha = args.alpha
 
     unit_block_depth = 32
-    decoder_int_filter_size = 4
+    decoder_int_filter_size = 16
     downsample_num = int(np.log2(input_width // decoder_int_filter_size))
     upsample_num = downsample_num
-    bottleneck_num = 4
+    bottleneck_num = 8
     query_dimension = 128
     style_dimension = 128
     representation_dimension = query_dimension
-    aug_mem_size = 500
+    aug_mem_size = 1000
     num_channel = 3
     use_style = True
     use_style_mem = True
-    
-    if mode == 'train':
-        train(model_path)
-    elif mode == 'test':
-        test(model_path)
-    else:
-        print('Train or Test?')
 
     if mode == 'train':
         train(model_path)
