@@ -200,11 +200,11 @@ def decoder(content, style, activation=tf.nn.relu, norm='batch', scope='decoder'
 
         for i in range(bottleneck_num):
             if b_use_style is True:
-                l = layers.add_se_adain_residual_block(l, style_mu, style_var, filter_dims=[7, 7, block_depth], act_func=activation,
-                                                       use_dilation=False, scope=scope + '_bt_block_' + str(i), padding='REFL', pad=3)
+                l = layers.add_se_adain_residual_block(l, style_mu, style_var, filter_dims=[3, 3, block_depth], act_func=activation,
+                                                       use_dilation=False, scope=scope + '_bt_block_' + str(i), padding='REFL', pad=1)
             else:
-                l = layers.add_se_residual_block(l, filter_dims=[7, 7, block_depth], act_func=activation,
-                                                 norm=norm, b_train=b_train, use_dilation=False, scope='bt_block_' + str(i), padding='REFL', pad=3)
+                l = layers.add_se_residual_block(l, filter_dims=[3, 3, block_depth], act_func=activation,
+                                                 norm=norm, b_train=b_train, use_dilation=False, scope='bt_block_' + str(i), padding='REFL', pad=1)
 
             print(scope + ' Bottleneck Block : ' + str(l.get_shape().as_list()))
 
