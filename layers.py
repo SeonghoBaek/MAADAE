@@ -158,8 +158,52 @@ def coord_conv(input, scope, filter_dims, stride_dims, padding='SAME',
     return conv(coord_tensor, scope, filter_dims, stride_dims, padding, non_linear_fn, dilation, bias, sn)
 
 
-def conv(input, scope, filter_dims, stride_dims, padding='SAME', pad=0,
-         non_linear_fn=tf.nn.relu, dilation=[1, 1, 1, 1], bias=True, sn=False):
+def depthwise_conv(input, filter_dims, stride_dims, padding='SAME', pad=0, non_linear_fn=tf.nn.relu, bias=True, scope='depthwise_conv'):
+    input_dims = input.get_shape().as_list()
+
+    assert (len(input_dims) == 4)  # batch_size, height, width, num_channels_in
+    assert (len(filter_dims) == 2)  # height, width
+    assert (len(stride_dims) == 2)  # stride height and width
+
+    num_channels_in = input_dims[-1]
+    filter_h, filter_w = filter_dims
+    num_channels_out = 1
+    stride_h, stride_w = stride_dims
+
+    with tf.variable_scope(scope, reuse=tf.AUTO_REUSE):
+
+        conv_weight = tf.get_variable('conv_weight',
+                                      shape=[filter_h, filter_w, num_channels_in, num_channels_out],
+                                      initializer=tf.truncated_normal_initializer(mean=0.0, stddev=0.1))
+
+        if bias is True:
+            conv_bias = tf.get_variable('conv_bias', shape=[num_channels_in],
+                                        initializer=tf.zeros_initializer)
+
+        x = input
+
+        if padding == 'ZERO':
+            x = tf.pad(x, [[0, 0], [pad, pad], [pad, pad], [0, 0]])
+            padding = 'VALID'
+
+        if padding == 'REFL':
+            x = tf.pad(x, [[0, 0], [pad, pad], [pad, pad], [0, 0]], mode='REFLECT')
+            padding = 'VALID'
+
+        map = tf.nn.depthwise_conv2d(x, filter=conv_weight, strides=[1, stride_h, stride_w, 1], padding=padding)
+
+        if bias is True:
+            map = tf.nn.bias_add(map, conv_bias)
+
+        if non_linear_fn is not None:
+            activation = non_linear_fn(map)
+        else:
+            activation = map
+
+        return activation
+
+
+def conv(input, scope, filter_dims, stride_dims, padding='SAME', pad=0, non_linear_fn=tf.nn.relu, dilation=[1, 1, 1, 1], bias=True, sn=False):
     input_dims = input.get_shape().as_list()
 
     assert (len(input_dims) == 4)  # batch_size, height, width, num_channels_in
@@ -179,12 +223,6 @@ def conv(input, scope, filter_dims, stride_dims, padding='SAME', pad=0,
         if bias is True:
             conv_bias = tf.get_variable('conv_bias', shape=[num_channels_out],
                                         initializer=tf.zeros_initializer)
-
-        #conv_weight = tf.Variable(
-        #    tf.truncated_normal([filter_h, filter_w, num_channels_in, num_channels_out], stddev=0.1, dtype=tf.float32))
-
-        #if bias is True:
-        #    conv_bias = tf.Variable(tf.zeros([num_channels_out], dtype=tf.float32))
 
         conv_filter = conv_weight
 
@@ -211,7 +249,6 @@ def conv(input, scope, filter_dims, stride_dims, padding='SAME', pad=0,
         else:
             activation = map
 
-        # print(activation.get_shape().as_list())
         return activation
 
 
@@ -310,7 +347,7 @@ def add_residual_layer(layer, filter_dims, act_func=tf.nn.relu, scope='residual_
         l = conv(l, scope='conv', filter_dims=filter_dims, stride_dims=[1, 1],
                  dilation=dilation, non_linear_fn=None, bias=use_bias, sn=sn, padding=padding, pad=pad)
 
-        if norm is not 'None':
+        if norm is not None:
             l = conv_normalize(l, norm=norm, b_train=b_train, scope='norm')
 
         if act_func is not None:
@@ -340,9 +377,6 @@ def global_avg_pool(input_data, output_length=1, padding='VALID', use_bias=False
     assert (len(input_dims) == 4)  # batch_size, height, width, num_channels_in
 
     num_channels_in = input_dims[-1]
-    height = input_dims[1]
-    width = input_dims[2]
-
     l = input_data
 
     with tf.variable_scope(scope, reuse=tf.AUTO_REUSE):
@@ -357,9 +391,6 @@ def global_avg_pool(input_data, output_length=1, padding='VALID', use_bias=False
                 l = tf.nn.bias_add(l, conv_bias)
 
         pool = tf.reduce_mean(l, axis=[1, 2])
-
-        #if output_length != 1:
-        #    pool = tf.squeeze(pool, axis=[1, 2])
 
         return pool
 
@@ -667,13 +698,18 @@ def add_se_adain_residual_block(in_layer, style_mu, style_var, filter_dims, act_
         if use_dilation is True:
             dilation = [1, 2, 2, 1]
 
-        l = conv(l, scope='se_adain_res_conv', filter_dims=[filter_dims[0], filter_dims[1], num_channel_out], stride_dims=[1, 1],
-                 dilation=dilation, non_linear_fn=act_func, bias=True, padding=padding, pad=pad)
+        # ResNext
+        l = depthwise_conv(l, filter_dims=[filter_dims[0], filter_dims[1]], stride_dims=[1, 1], non_linear_fn=None, padding=padding, pad=pad)
         l = AdaIN(l, style_mu, style_var, scope='residual_adain1')
+        l = conv(l, scope='residual_invt_1', filter_dims=[1, 1, num_channel_out * 4], stride_dims=[1, 1], dilation=dilation, non_linear_fn=act_func, sn=False)
+        l = conv(l, scope='residual_invt_2', filter_dims=[1, 1, num_channel_out], stride_dims=[1, 1], dilation=dilation, non_linear_fn=None, sn=False)
 
-        l = conv(l, scope='se_adain_res_conv', filter_dims=[filter_dims[0], filter_dims[1], num_channel_out], stride_dims=[1, 1],
-                 dilation=dilation, non_linear_fn=None, bias=True, padding=padding, pad=pad)
-        l = AdaIN(l, style_mu, style_var, scope='residual_adain2')
+        # Plain
+        # l = conv(l, scope='se_adain_res_conv', filter_dims=[filter_dims[0], filter_dims[1], num_channel_out], stride_dims=[1, 1],
+        #         dilation=dilation, non_linear_fn=None, bias=True, padding=padding, pad=pad)
+        # l = conv(l, scope='se_adain_res_conv', filter_dims=[filter_dims[0], filter_dims[1], num_channel_out], stride_dims=[1, 1],
+        #         dilation=dilation, non_linear_fn=None, bias=True, padding=padding, pad=pad)
+        # l = AdaIN(l, style_mu, style_var, scope='residual_adain2')
 
         # SE Path
         # Squeeze
@@ -685,18 +721,18 @@ def add_se_adain_residual_block(in_layer, style_mu, style_var, filter_dims, act_
         sl = tf.expand_dims(sl, axis=2)
         l = tf.multiply(l, sl)
         l = tf.add(l, in_layer)
-        l = act_func(l)
+
+        # ViT style
+        # l = act_func(l)
 
     return l
 
 
 def add_se_residual_block(in_layer, filter_dims, act_func=tf.nn.relu, norm='layer',
                        b_train=False, use_residual=True, scope='residual_block', use_dilation=False,
-                       sn=False, use_bottleneck=False, padding='SAME', pad=0):
+                       use_bottleneck=False, padding='SAME', pad=0):
     with tf.variable_scope(scope, reuse=tf.AUTO_REUSE):
         l = in_layer
-        input_dims = in_layer.get_shape().as_list()
-        num_channel_in = input_dims[-1]
         num_channel_out = filter_dims[-1]
 
         dilation = [1, 1, 1, 1]
@@ -715,17 +751,21 @@ def add_se_residual_block(in_layer, filter_dims, act_func=tf.nn.relu, norm='laye
         else:
             bn_depth = num_channel_out
 
-        l = add_residual_layer(l, filter_dims=[filter_dims[0], filter_dims[1], bn_depth], act_func=act_func, norm=norm, b_train=b_train,
-                               scope='residual_layer1', dilation=dilation, sn=sn, padding=padding, pad=pad)
+        # ResNext
+        l = depthwise_conv(l, filter_dims=[filter_dims[0], filter_dims[1]], stride_dims=[1, 1], non_linear_fn=None, padding=padding, pad=pad)
+        l = conv_normalize(l, norm=norm, b_train=b_train, scope='norm')
+        l = conv(l, scope='residual_invt_1', filter_dims=[1, 1, bn_depth*4], stride_dims=[1, 1], dilation=dilation, non_linear_fn=act_func, sn=False)
+        l = conv(l, scope='residual_invt_2', filter_dims=[1, 1, bn_depth], stride_dims=[1, 1], dilation=dilation, non_linear_fn=None, sn=False)
 
-        l = add_residual_layer(l, filter_dims=[filter_dims[0], filter_dims[1], bn_depth], act_func=None, norm=norm,
-                               b_train=b_train, scope='residual_layer2', dilation=dilation, sn=sn, padding=padding, pad=pad)
+        # Plain
+        # l = add_residual_layer(l, filter_dims=[filter_dims[0], filter_dims[1], bn_depth], act_func=None, norm=norm, b_train=b_train,
+        #                       scope='residual_layer1', dilation=dilation, sn=sn, padding=padding, pad=pad)
+        # l = add_residual_layer(l, filter_dims=[filter_dims[0], filter_dims[1], bn_depth], act_func=None, norm=norm,
+        #                       b_train=b_train, scope='residual_layer2', dilation=dilation, sn=sn, padding=padding, pad=pad)
 
         if use_bottleneck is True:
             l = act_func(l)
-            l = conv(l, scope='bt_conv2', filter_dims=[1, 1, num_channel_out], stride_dims=[1, 1],
-                     dilation=dilation,
-                     non_linear_fn=None, sn=False)
+            l = conv(l, scope='bt_conv2', filter_dims=[1, 1, num_channel_out], stride_dims=[1, 1], dilation=dilation, non_linear_fn=None, sn=False)
             l = conv_normalize(l, norm=norm, b_train=b_train, scope='bt_norm2')
 
         # SE Path
@@ -740,9 +780,9 @@ def add_se_residual_block(in_layer, filter_dims, act_func=tf.nn.relu, norm='laye
 
         if use_residual is True:
             l = tf.add(l, in_layer)
-            l = act_func(l)
-        else:
-            l = act_func(l)
+
+        # ViT style
+        # l = act_func(l)
 
     return l
 
@@ -752,8 +792,6 @@ def add_residual_block(in_layer, filter_dims, act_func=tf.nn.relu, norm='layer',
                        sn=False, use_bottleneck=False):
     with tf.variable_scope(scope, reuse=tf.AUTO_REUSE):
         l = in_layer
-        input_dims = in_layer.get_shape().as_list()
-        num_channel_in = input_dims[-1]
         num_channel_out = filter_dims[-1]
 
         dilation = [1, 1, 1, 1]
@@ -764,9 +802,7 @@ def add_residual_block(in_layer, filter_dims, act_func=tf.nn.relu, norm='layer',
         # Bottle Neck Layer
         if use_bottleneck is True:
             bn_depth = num_channel_out // 2
-            l = conv(l, scope='bt_conv1', filter_dims=[1, 1, bn_depth], stride_dims=[1, 1],
-                     dilation=[1, 1, 1, 1],
-                     non_linear_fn=None, sn=False)
+            l = conv(l, scope='bt_conv1', filter_dims=[1, 1, bn_depth], stride_dims=[1, 1], dilation=[1, 1, 1, 1], non_linear_fn=None)
             l = conv_normalize(l, norm=norm, b_train=b_train, scope='bt_norm1')
             l = act_func(l)
         else:
@@ -777,8 +813,7 @@ def add_residual_block(in_layer, filter_dims, act_func=tf.nn.relu, norm='layer',
 
         if use_bottleneck is True:
             l = act_func(l)
-            l = conv(l, scope='bt_conv2', filter_dims=[1, 1, num_channel_out], stride_dims=[1, 1],
-                     dilation=[1, 1, 1, 1],
+            l = conv(l, scope='bt_conv2', filter_dims=[1, 1, num_channel_out], stride_dims=[1, 1], dilation=[1, 1, 1, 1],
                      non_linear_fn=None, sn=False)
             l = conv_normalize(l, norm=norm, b_train=b_train, scope='bt_norm2')
 
@@ -938,3 +973,7 @@ class ConvGRUCell(tf.nn.rnn_cell.RNNCell):
           h = u * h + (1 - u) * self._activation(y)
 
         return h, h
+
+
+def sigmoid(x, slope=1.0):
+    return tf.constant(1.) / (tf.constant(1.) + tf.exp(-tf.constant(1.0)*(x*slope)))
