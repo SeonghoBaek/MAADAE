@@ -3,10 +3,6 @@
 # e-mail: seonghobaek@gmail.com
 
 
-# MAADAE[meidei]: Memory Augmented Adversarial Dual AUto Encoder
-# Author: Seongho Baek
-# e-mail: seongho.baek@sk.com
-
 import tensorflow as tf
 import numpy as np
 import os
