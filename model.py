@@ -2,6 +2,11 @@
 # Author: Seongho Baek
 # e-mail: seonghobaek@gmail.com
 
+
+# MAADAE[meidei]: Memory Augmented Adversarial Dual AUto Encoder
+# Author: Seongho Baek
+# e-mail: seongho.baek@sk.com
+
 import tensorflow as tf
 import numpy as np
 import os
@@ -75,7 +80,7 @@ def load_images(file_name_list, base_dir, cutout=False, add_eps=False, rotate=-1
     return np.array(images)
 
 
-def get_residual_loss(value, target, type='l1', gamma=1.0):
+def get_residual_loss(value, target, type='l1', alpha=1.0):
     if type == 'rmse':
         loss = tf.sqrt(tf.reduce_mean(tf.square(tf.subtract(target, value))))
     elif type == 'ce':
@@ -90,7 +95,17 @@ def get_residual_loss(value, target, type='l1', gamma=1.0):
         eps = 1e-10
         loss = tf.reduce_mean(-1 * value * tf.log(value + eps))
 
-    return loss * gamma
+    return loss * alpha
+
+
+def get_random_box_residual_loss(img1, img2, num_box=5, num_batches=1, box_size=(12, 12), alpha=1.0):
+    boxes = tf.random.uniform(shape=(num_box, 4))
+    box_indices = tf.random.uniform(shape=(num_box,), minval=0, maxval=num_batches, dtype=tf.int32)
+
+    out1 = tf.image.crop_and_resize(img1, boxes, box_indices, box_size)
+    out2 = tf.image.crop_and_resize(img2, boxes, box_indices, box_size)
+
+    return alpha * tf.reduce_mean(tf.abs(out1 - out2))
 
 
 def get_discriminator_loss(real, fake, type='wgan', gamma=1.0):
@@ -120,6 +135,7 @@ def encoder(in_tensor, activation=tf.nn.relu, norm='batch', b_use_style=False, s
     with tf.variable_scope(scope, reuse=tf.AUTO_REUSE):
         print(scope + ' encoder input: ' + str(in_tensor.get_shape().as_list()))
 
+        # Style Encoder
         block_depth = unit_block_depth
 
         if b_use_style is True:
@@ -130,9 +146,8 @@ def encoder(in_tensor, activation=tf.nn.relu, norm='batch', b_use_style=False, s
 
             for i in range(enc_dn_num):
                 s = layers.blur_pooling2d(s, kernel_size=5, scope='style_blur_' + str(i), padding='REFL')
-                print(scope + 'Style Blur Pooling Block ' + str(i) + ': ' + str(s.get_shape().as_list()))
 
-                block_depth = block_depth + unit_block_depth
+                block_depth = block_depth * 2
                 s = layers.conv(s, scope='style_downsapmple_' + str(i), filter_dims=[1, 1, block_depth],
                                 stride_dims=[1, 1], non_linear_fn=None, bias=False)
                 # Bad for style extraction
@@ -143,9 +158,12 @@ def encoder(in_tensor, activation=tf.nn.relu, norm='batch', b_use_style=False, s
                 print(scope + ' Style Downsample Block ' + str(i) + ': ' + str(s.get_shape().as_list()))
 
             style_query = layers.global_avg_pool(s, style_dimension, scope='sgap')
+            print(scope + ' content latent dimension : ' + str(style_query.get_shape().as_list()))
         else:
             style_query = None
 
+        # Contents Encoder
+        block_depth = unit_block_depth
         l = layers.conv(in_tensor, scope='contents_init', filter_dims=[4, 4, block_depth],
                         stride_dims=[4, 4], non_linear_fn=activation, padding='REFL', pad=1)
 
@@ -154,9 +172,8 @@ def encoder(in_tensor, activation=tf.nn.relu, norm='batch', b_use_style=False, s
         # Downsample stage.
         for i in range(enc_dn_num):
             l = layers.blur_pooling2d(l, kernel_size=5, scope='blur_' + str(i), padding='REFL')
-            print(scope + ' Blur Pooling Block ' + str(i) + ': ' + str(l.get_shape().as_list()))
 
-            block_depth = block_depth + unit_block_depth
+            block_depth = block_depth * 2
             l = layers.conv(l, scope='downsapmple_' + str(i), filter_dims=[1, 1, block_depth],
                             stride_dims=[1, 1], non_linear_fn=None)
             l = layers.conv_normalize(l, norm=norm, b_train=b_train, scope='norm_' + str(i))
@@ -171,9 +188,8 @@ def encoder(in_tensor, activation=tf.nn.relu, norm='batch', b_use_style=False, s
             l = layers.add_se_residual_block(l, filter_dims=[7, 7, block_depth], act_func=activation,
                                              norm=norm, b_train=b_train, use_dilation=False, scope='bt_block_' + str(i), padding='REFL', pad=3)
 
-        l = layers.global_avg_pool(l, query_dimension, scope='gap')
-        print(scope + ' z dimension : ' + str(l.get_shape().as_list()))
-        content_query = l
+        content_query = layers.global_avg_pool(l, query_dimension, scope='gap')
+        print(scope + ' content latent dimension : ' + str(content_query.get_shape().as_list()))
 
     return content_query, style_query
 
@@ -182,14 +198,14 @@ def decoder(content, style, activation=tf.nn.relu, norm='batch', scope='decoder'
     with tf.variable_scope(scope, reuse=tf.AUTO_REUSE):
         print(scope + ' decoder input: ' + str(content.get_shape().as_list()))
         l = content
-        block_depth = unit_block_depth + (unit_block_depth * upsample_num)
+        block_depth = unit_block_depth * 8
 
         # Update by image size for your own.
         l = layers.fc(l, decoder_int_filter_size * decoder_int_filter_size, non_linear_fn=activation, scope='fc1', use_bias=True)
         l = tf.reshape(l, shape=[-1, decoder_int_filter_size, decoder_int_filter_size, 1])
         l = layers.conv(l, scope='init', filter_dims=[3, 3, block_depth], stride_dims=[1, 1], non_linear_fn=activation, padding='REFL', pad=1)
 
-        # Bottleneck stage
+        # Style Parmaters
         if b_use_style is True:
             s = layers.fc(style, block_depth, non_linear_fn=activation, scope='style_linear1', use_bias=True)
             s = layers.fc(s, block_depth, non_linear_fn=activation, scope='style_linear2', use_bias=True)
@@ -200,18 +216,16 @@ def decoder(content, style, activation=tf.nn.relu, norm='batch', scope='decoder'
 
         for i in range(bottleneck_num):
             if b_use_style is True:
-                l = layers.add_se_adain_residual_block(l, style_mu, style_var, filter_dims=[3, 3, block_depth], act_func=activation,
-                                                       use_dilation=False, scope=scope + '_bt_block_' + str(i), padding='REFL', pad=1)
+                l = layers.add_se_adain_residual_block(l, style_mu, style_var, filter_dims=[3, 3, block_depth], act_func=activation, use_dilation=False, scope=scope + '_bt_block_' + str(i), padding='REFL', pad=1)
             else:
-                l = layers.add_se_residual_block(l, filter_dims=[3, 3, block_depth], act_func=activation,
-                                                 norm=norm, b_train=b_train, use_dilation=False, scope='bt_block_' + str(i), padding='REFL', pad=1)
+                l = layers.add_se_residual_block(l, filter_dims=[3, 3, block_depth], act_func=activation, norm=norm, b_train=b_train, use_dilation=False, scope='bt_block_' + str(i), padding='REFL', pad=1)
 
             print(scope + ' Bottleneck Block : ' + str(l.get_shape().as_list()))
 
         # Upsample stage
         for i in range(upsample_num):
             # ESPCN upsample
-            block_depth = block_depth - unit_block_depth
+            block_depth = block_depth // 2
             l = layers.conv(l, scope='espcn_' + str(i), filter_dims=[3, 3, block_depth * 2 * 2],
                             stride_dims=[1, 1], non_linear_fn=None, padding='REFL', pad=1)
             l = layers.conv_normalize(l, norm=norm, b_train=b_train, scope='espcn_norm_' + str(i))
@@ -242,7 +256,7 @@ def memory(query, scope='aug_mem'):
         distance = tf.matmul(norm_q, norm_mem, transpose_b=True)  # [B, Q]
 
         # Adaptive Scaling
-        s = layers.fc(query, 2*representation_dimension, non_linear_fn=tf.nn.relu, scope='mem_linear1', use_bias=True)
+        s = layers.fc(query, 2*representation_dimension, non_linear_fn=tf.nn.leaky_relu, scope='mem_linear1', use_bias=True)
         scale_alpha = layers.fc(s, aug_mem_size, non_linear_fn=tf.nn.sigmoid, scope='mem_linear_alpha', use_bias=True)
         scale_beta = layers.fc(s, aug_mem_size, non_linear_fn=tf.nn.sigmoid, scope='mem_linear_beta', use_bias=True)
         
@@ -306,18 +320,18 @@ def train(model_path='None'):
     config = tf.ConfigProto(allow_soft_placement=True)
     config.gpu_options.allow_growth = True
 
-    learning_rate = 2e-4
+    learning_rate = 1e-4
 
     # Loss Define
     sparsity = 2e-4
 
-    d_loss_x_dx = get_residual_loss(X_IN, D_X, type='l1', gamma=alpha)
-    d_loss_gx_dgx = get_residual_loss(G_X, D_GX, type='l1')
-    g_loss_x_gx = get_residual_loss(X_IN, G_X, type='l1', gamma=alpha)
-    g_loss_gx_dgx = get_residual_loss(G_X, D_GX, type='l1')
+    d_loss_x_dx = get_residual_loss(X_IN, D_X, type='l1', alpha=alpha)
+    d_loss_gx_dgx = get_random_box_residual_loss(G_X, D_GX, num_box=10, num_batches=batch_size, box_size=(24, 24))
+    g_loss_x_gx = get_residual_loss(X_IN, G_X, type='l1', alpha=alpha)
+    g_loss_gx_dgx = get_random_box_residual_loss(G_X, D_GX, num_box=10, num_batches=batch_size, box_size=(24, 24))
 
     # Simple Balance Mode
-    sigmoid_d_loss_gx_dgx = 1 - layers.sigmoid(d_loss_gx_dgx, slope=10.0)
+    sigmoid_d_loss_gx_dgx = 1 - layers.sigmoid(d_loss_gx_dgx)
     sigmoid_g_loss_gx_dgx = layers.sigmoid(d_loss_gx_dgx)
 
     disc_loss = d_loss_x_dx - sigmoid_d_loss_gx_dgx * d_loss_gx_dgx
@@ -520,7 +534,7 @@ if __name__ == '__main__':
     parser.add_argument('--img_size', type=int, help='training image size', default=512)
     parser.add_argument('--epoch', type=int, help='num epoch', default=1000)
     parser.add_argument('--batch_size', type=int, help='Training batch size', default=16)
-    parser.add_argument('--alpha', type=int, help='AE loss weight', default=10)
+    parser.add_argument('--alpha', type=int, help='AE loss weight', default=1)
 
     args = parser.parse_args()
 
