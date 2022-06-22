@@ -3,6 +3,13 @@
 # Contact: seonghobaek@gmail.com
 # ==============================================================================
 
+
+# ==============================================================================
+# Author: Seongho Baek
+# Contact: seongho.baek@sk.com
+#
+# ==============================================================================
+
 import tensorflow as tf
 import numpy as np
 
@@ -705,16 +712,18 @@ def add_se_adain_residual_block(in_layer, style_mu, style_var, filter_dims, act_
         l = conv(l, scope='residual_invt_2', filter_dims=[1, 1, num_channel_out], stride_dims=[1, 1], dilation=dilation, non_linear_fn=None, sn=False)
 
         # Plain
-        # l = conv(l, scope='se_adain_res_conv', filter_dims=[filter_dims[0], filter_dims[1], num_channel_out], stride_dims=[1, 1],
+        #l = conv(l, scope='se_adain_res_conv', filter_dims=[filter_dims[0], filter_dims[1], num_channel_out], stride_dims=[1, 1],
         #         dilation=dilation, non_linear_fn=None, bias=True, padding=padding, pad=pad)
-        # l = conv(l, scope='se_adain_res_conv', filter_dims=[filter_dims[0], filter_dims[1], num_channel_out], stride_dims=[1, 1],
+        #l = AdaIN(l, style_mu, style_var, scope='residual_adain2')
+        #l = act_func(l)
+        #l = conv(l, scope='se_adain_res_conv', filter_dims=[filter_dims[0], filter_dims[1], num_channel_out], stride_dims=[1, 1],
         #         dilation=dilation, non_linear_fn=None, bias=True, padding=padding, pad=pad)
-        # l = AdaIN(l, style_mu, style_var, scope='residual_adain2')
+        #l = AdaIN(l, style_mu, style_var, scope='residual_adain2')
 
         # SE Path
         # Squeeze
         sl = global_avg_pool(l, output_length=num_channel_out, scope='squeeze')
-        sl = fc(sl, out_dim=num_channel_out // 8, non_linear_fn=tf.nn.leaky_relu, scope='reduction')
+        sl = fc(sl, out_dim=num_channel_out // 16, non_linear_fn=tf.nn.relu, scope='reduction')
         sl = fc(sl, out_dim=num_channel_out,  non_linear_fn=tf.nn.sigmoid, scope='transform')
         # Excitation
         sl = tf.expand_dims(sl, axis=1)
@@ -723,14 +732,13 @@ def add_se_adain_residual_block(in_layer, style_mu, style_var, filter_dims, act_
         l = tf.add(l, in_layer)
 
         # ViT style
-        # l = act_func(l)
+        #l = act_func(l)
 
     return l
 
 
-def add_se_residual_block(in_layer, filter_dims, act_func=tf.nn.relu, norm='layer',
-                       b_train=False, use_residual=True, scope='residual_block', use_dilation=False,
-                       use_bottleneck=False, padding='SAME', pad=0):
+def add_se_residual_block(in_layer, filter_dims, act_func=tf.nn.relu, norm='layer', b_train=False, scope='residual_block', use_dilation=False,
+                          use_bottleneck=False, padding='SAME', pad=0):
     with tf.variable_scope(scope, reuse=tf.AUTO_REUSE):
         l = in_layer
         num_channel_out = filter_dims[-1]
@@ -758,10 +766,10 @@ def add_se_residual_block(in_layer, filter_dims, act_func=tf.nn.relu, norm='laye
         l = conv(l, scope='residual_invt_2', filter_dims=[1, 1, bn_depth], stride_dims=[1, 1], dilation=dilation, non_linear_fn=None, sn=False)
 
         # Plain
-        # l = add_residual_layer(l, filter_dims=[filter_dims[0], filter_dims[1], bn_depth], act_func=None, norm=norm, b_train=b_train,
-        #                       scope='residual_layer1', dilation=dilation, sn=sn, padding=padding, pad=pad)
-        # l = add_residual_layer(l, filter_dims=[filter_dims[0], filter_dims[1], bn_depth], act_func=None, norm=norm,
-        #                       b_train=b_train, scope='residual_layer2', dilation=dilation, sn=sn, padding=padding, pad=pad)
+        #l = add_residual_layer(l, filter_dims=[filter_dims[0], filter_dims[1], bn_depth], act_func=act_func, norm=norm, b_train=b_train,
+        #                       scope='residual_layer1', dilation=dilation, padding=padding, pad=pad)
+        #l = add_residual_layer(l, filter_dims=[filter_dims[0], filter_dims[1], bn_depth], act_func=None, norm=norm,
+        #                       b_train=b_train, scope='residual_layer2', dilation=dilation, padding=padding, pad=pad)
 
         if use_bottleneck is True:
             l = act_func(l)
@@ -771,18 +779,17 @@ def add_se_residual_block(in_layer, filter_dims, act_func=tf.nn.relu, norm='laye
         # SE Path
         # Squeeze
         sl = global_avg_pool(l, output_length=num_channel_out, scope='squeeze')
-        sl = fc(sl, out_dim=num_channel_out // 8, non_linear_fn=tf.nn.leaky_relu, scope='reduction')
+        sl = fc(sl, out_dim=num_channel_out // 16, non_linear_fn=tf.nn.relu, scope='reduction')
         sl = fc(sl, out_dim=num_channel_out,  non_linear_fn=tf.nn.sigmoid, scope='transform')
         # Excitation
         sl = tf.expand_dims(sl, axis=1)
         sl = tf.expand_dims(sl, axis=2)
         l = tf.multiply(l, sl)
 
-        if use_residual is True:
-            l = tf.add(l, in_layer)
+        l = tf.add(l, in_layer)
 
         # ViT style
-        # l = act_func(l)
+        #l = act_func(l)
 
     return l
 
