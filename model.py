@@ -203,8 +203,12 @@ def decoder(content, style, activation=tf.nn.relu, norm='batch', scope='decoder'
         block_depth = unit_block_depth * (upsample_num + 1)
 
         # Update by image size for your own.
-        l = layers.fc(l, decoder_int_filter_size * decoder_int_filter_size, non_linear_fn=None, scope='fc1', use_bias=True)
-        l = tf.reshape(l, shape=[-1, decoder_int_filter_size, decoder_int_filter_size, 1])
+         num_depth = 1
+
+        if query_dimension > decoder_int_filter_size * decoder_int_filter_size:
+            num_depth = int(query_dimension // (decoder_int_filter_size * decoder_int_filter_size))
+        l = layers.fc(l, decoder_int_filter_size * decoder_int_filter_size * num_depth, non_linear_fn=None, scope='fc1', use_bias=True)
+        l = tf.reshape(l, shape=[-1, decoder_int_filter_size, decoder_int_filter_size, num_depth])
         l = layers.conv(l, scope='init', filter_dims=[3, 3, block_depth], stride_dims=[1, 1], non_linear_fn=activation, padding='REFL', pad=1)
 
         # Style Parmaters
@@ -585,8 +589,8 @@ if __name__ == '__main__':
     downsample_num = int(np.log2(input_width // decoder_int_filter_size))
     upsample_num = downsample_num
     bottleneck_num = 18
-    query_dimension = min([decoder_int_filter_size * decoder_int_filter_size, 128])
-    style_dimension = query_dimension
+    query_dimension = 128
+    style_dimension = 128
     representation_dimension = query_dimension
     aug_mem_size = 500
     num_channel = 3
