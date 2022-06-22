@@ -135,47 +135,53 @@ def encoder(in_tensor, activation=tf.nn.relu, norm='batch', b_use_style=False, s
         block_depth = unit_block_depth
 
         if b_use_style is True:
-            s = layers.conv(in_tensor, scope='style_init', filter_dims=[4, 4, block_depth],
-                            stride_dims=[4, 4], non_linear_fn=activation, padding='REFL', pad=1)
+            s = layers.conv(in_tensor, scope='style_init', filter_dims=[7, 7, block_depth],
+                            stride_dims=[1, 1], non_linear_fn=activation, padding='REFL', pad=1)
 
-            enc_dn_num = downsample_num - 2
+            enc_dn_num = downsample_num
 
             for i in range(enc_dn_num):
+                block_depth = block_depth + unit_block_depth
                 s = layers.blur_pooling2d(s, kernel_size=5, scope='style_blur_' + str(i), padding='REFL')
-
-                block_depth = block_depth * 2
                 s = layers.conv(s, scope='style_downsapmple_' + str(i), filter_dims=[1, 1, block_depth],
                                 stride_dims=[1, 1], non_linear_fn=None, bias=False)
+                #s = layers.conv_normalize(s, norm=norm, b_train=b_train, scope='style_norm_' + str(i))
+                s = activation(s)
+                '''
+                block_depth = block_depth + unit_block_depth
+                s = layers.conv(s, scope='style_downsapmple_' + str(i), filter_dims=[3, 3, block_depth],
+                                stride_dims=[2, 2], non_linear_fn=None, bias=False)
                 # Bad for style extraction
                 # s = layers.conv_normalize(s, norm='batch', b_train=b_train, scope='style_norm_' + str(i))
-                s = layers.se_block(s, scope='style_se_block_' + str(i))
                 s = activation(s)
-
+                '''
                 print(scope + ' Style Downsample Block ' + str(i) + ': ' + str(s.get_shape().as_list()))
 
             style_query = layers.global_avg_pool(s, style_dimension, scope='sgap')
-            print(scope + ' content latent dimension : ' + str(style_query.get_shape().as_list()))
+            print(scope + ' style latent dimension : ' + str(style_query.get_shape().as_list()))
         else:
             style_query = None
 
         # Contents Encoder
         block_depth = unit_block_depth
-        l = layers.conv(in_tensor, scope='contents_init', filter_dims=[4, 4, block_depth],
-                        stride_dims=[4, 4], non_linear_fn=activation, padding='REFL', pad=1)
+        l = layers.conv(in_tensor, scope='contents_init', filter_dims=[7, 7, block_depth],
+                        stride_dims=[1, 1], non_linear_fn=activation, padding='REFL', pad=1)
 
-        enc_dn_num = downsample_num - 2
-
+        enc_dn_num = downsample_num
         # Downsample stage.
         for i in range(enc_dn_num):
+            block_depth = block_depth + unit_block_depth
             l = layers.blur_pooling2d(l, kernel_size=5, scope='blur_' + str(i), padding='REFL')
-
-            block_depth = block_depth * 2
             l = layers.conv(l, scope='downsapmple_' + str(i), filter_dims=[1, 1, block_depth],
                             stride_dims=[1, 1], non_linear_fn=None)
             l = layers.conv_normalize(l, norm=norm, b_train=b_train, scope='norm_' + str(i))
-            l = layers.se_block(l, scope='content_se_block_' + str(i))
             l = activation(l)
-
+            '''
+            l = layers.conv(l, scope='downsapmple_' + str(i), filter_dims=[3, 3, block_depth],
+                            stride_dims=[2, 2], non_linear_fn=None)
+            l = layers.conv_normalize(l, norm=norm, b_train=b_train, scope='norm_' + str(i))
+            l = activation(l)
+            '''
             print(scope + ' Downsample Block ' + str(i) + ': ' + str(l.get_shape().as_list()))
 
         # Bottleneck stage
@@ -194,10 +200,10 @@ def decoder(content, style, activation=tf.nn.relu, norm='batch', scope='decoder'
     with tf.variable_scope(scope, reuse=tf.AUTO_REUSE):
         print(scope + ' decoder input: ' + str(content.get_shape().as_list()))
         l = content
-        block_depth = unit_block_depth * 8
+        block_depth = unit_block_depth * (upsample_num + 1)
 
         # Update by image size for your own.
-        l = layers.fc(l, decoder_int_filter_size * decoder_int_filter_size, non_linear_fn=activation, scope='fc1', use_bias=True)
+        l = layers.fc(l, decoder_int_filter_size * decoder_int_filter_size, non_linear_fn=None, scope='fc1', use_bias=True)
         l = tf.reshape(l, shape=[-1, decoder_int_filter_size, decoder_int_filter_size, 1])
         l = layers.conv(l, scope='init', filter_dims=[3, 3, block_depth], stride_dims=[1, 1], non_linear_fn=activation, padding='REFL', pad=1)
 
@@ -212,21 +218,23 @@ def decoder(content, style, activation=tf.nn.relu, norm='batch', scope='decoder'
 
         for i in range(bottleneck_num):
             if b_use_style is True:
-                l = layers.add_se_adain_residual_block(l, style_mu, style_var, filter_dims=[3, 3, block_depth], act_func=activation, use_dilation=False, scope=scope + '_bt_block_' + str(i), padding='REFL', pad=1)
+                l = layers.add_se_adain_residual_block(l, style_mu, style_var, filter_dims=[7, 7, block_depth], act_func=activation, use_dilation=False,
+                                                       scope=scope + '_bt_block_' + str(i), padding='REFL', pad=3)
             else:
-                l = layers.add_se_residual_block(l, filter_dims=[3, 3, block_depth], act_func=activation, norm=norm, b_train=b_train, use_dilation=False, scope='bt_block_' + str(i), padding='REFL', pad=1)
+                l = layers.add_se_residual_block(l, filter_dims=[7, 7, block_depth], act_func=activation, norm=norm, b_train=b_train, use_dilation=False,
+                                                 scope='bt_block_' + str(i), padding='REFL', pad=3)
 
             print(scope + ' Bottleneck Block : ' + str(l.get_shape().as_list()))
 
         # Upsample stage
         for i in range(upsample_num):
             # ESPCN upsample
-            block_depth = block_depth // 2
+            block_depth = block_depth - unit_block_depth
             l = layers.conv(l, scope='espcn_' + str(i), filter_dims=[3, 3, block_depth * 2 * 2],
                             stride_dims=[1, 1], non_linear_fn=None, padding='REFL', pad=1)
             l = layers.conv_normalize(l, norm=norm, b_train=b_train, scope='espcn_norm_' + str(i))
-            l = layers.se_block(l, scope='se_block_' + str(i))
             l = activation(l)
+            l = layers.se_block(l, scope='se_' + str(i))
             l = tf.nn.depth_to_space(l, 2)
 
             print(scope + ' Upsampling ' + str(i) + ': ' + str(l.get_shape().as_list()))
@@ -252,9 +260,8 @@ def memory(query, scope='aug_mem'):
         distance = tf.matmul(norm_q, norm_mem, transpose_b=True)  # [B, Q]
 
         # Adaptive Scaling
-        s = layers.fc(query, 2*representation_dimension, non_linear_fn=tf.nn.leaky_relu, scope='mem_linear1', use_bias=True)
-        scale_alpha = layers.fc(s, aug_mem_size, non_linear_fn=tf.nn.sigmoid, scope='mem_linear_alpha', use_bias=True)
-        scale_beta = layers.fc(s, aug_mem_size, non_linear_fn=tf.nn.sigmoid, scope='mem_linear_beta', use_bias=True)
+        scale_alpha = layers.fc(query, aug_mem_size, non_linear_fn=None, scope='mem_linear_alpha', use_bias=True)
+        scale_beta = layers.fc(query, aug_mem_size, non_linear_fn=None, scope='mem_linear_beta', use_bias=True)
         
         distance = scale_alpha * distance + scale_beta  # [B, Q]
 
@@ -280,6 +287,10 @@ def train(model_path='None'):
 
     train_start_time = time.time()
 
+    learning_rate = 1e-3
+    min_learning_rate = 1e-5
+    sparsity = 2e-5
+
     X_IN = tf.placeholder(tf.float32, [None, input_height, input_width, num_channel])
     B_TRAIN = tf.placeholder(tf.bool)
     LR = tf.placeholder(tf.float32, None)
@@ -287,82 +298,78 @@ def train(model_path='None'):
     # Generator
     z_gen, s_gen = encoder(X_IN, norm='instance', b_use_style=use_style, scope=G_Encoder_scope, b_train=B_TRAIN)
     attention_g, latent_g = memory(z_gen, scope=G_M_scope)
+    st_attention_g, st_latent_g = memory(s_gen, scope=GS_M_scope)
+    G_X = decoder(latent_g, st_latent_g, norm='instance', scope=G_Decoder_scope, b_use_style=True, b_train=B_TRAIN)
 
-    if use_style_mem is True:
-        st_attention_g, st_latent_g = memory(s_gen, scope=GS_M_scope)
-        G_X = decoder(latent_g, st_latent_g, norm='instance', scope=G_Decoder_scope, b_use_style=True, b_train=B_TRAIN)
+    if use_generator_only is True:
+        gen_loss = get_residual_loss(X_IN, G_X, type='l1', alpha=alpha)
+        sparsity_reg_loss = sparsity * (get_residual_loss(attention_g, None, type='entropy') + get_residual_loss(st_attention_g, None, type='entropy'))
+
+        generator_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=G_Encoder_scope) + \
+                         tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=G_Decoder_scope) + \
+                         tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=G_M_scope) + \
+                         tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=GS_M_scope)
+
+        memory_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=G_M_scope) + \
+                      tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=GS_M_scope)
+
+        sparsity_reg_vars = [v for v in memory_vars if 'mem_vars' in v.name]
+
+        # Optimizer
+        generator_optimizer = tf.train.AdamOptimizer(learning_rate=LR).minimize(gen_loss, var_list=generator_vars)
+        sparsity_reg_optimizer = tf.train.AdamOptimizer(learning_rate=LR).minimize(sparsity_reg_loss, var_list=sparsity_reg_vars)
     else:
-        G_X = decoder(latent_g, s_gen, norm='instance', scope=G_Decoder_scope, b_use_style=use_style, b_train=B_TRAIN)
+        # Discriminator
+        z_disc_gx, s_disc_gx = encoder(G_X, norm='instance', b_use_style=use_style, scope=D_Encoder_scope, b_train=B_TRAIN)
+        attention_d_gx, latent_d_gx = memory(z_disc_gx, scope=D_M_scope)
 
-    # Discriminator
-    z_disc_gx, s_disc_gx = encoder(G_X, norm='instance', b_use_style=use_style, scope=D_Encoder_scope, b_train=B_TRAIN)
-    attention_d_gx, latent_d_gx = memory(z_disc_gx, scope=D_M_scope)
-
-    if use_style_mem is True:
         st_attention_d_gx, st_latent_d_gx = memory(s_disc_gx, scope=DS_M_scope)
         D_GX = decoder(latent_d_gx, st_latent_d_gx, norm='instance', scope=D_Decoder_scope, b_use_style=True, b_train=B_TRAIN)
-    else:
-        D_GX = decoder(latent_d_gx, s_disc_gx, norm='instance', scope=D_Decoder_scope, b_use_style=use_style, b_train=B_TRAIN)
-
-    z_disc_x, s_disc_x = encoder(X_IN, norm='instance', b_use_style=use_style, scope=D_Encoder_scope, b_train=B_TRAIN)
-    attention_d_x, latent_d_x = memory(z_disc_x, scope=D_M_scope)
-
-    if use_style_mem is True:
+        z_disc_x, s_disc_x = encoder(X_IN, norm='instance', b_use_style=use_style, scope=D_Encoder_scope, b_train=B_TRAIN)
+        attention_d_x, latent_d_x = memory(z_disc_x, scope=D_M_scope)
         st_attention_d_x, st_latent_d_x = memory(s_disc_x, scope=DS_M_scope)
         D_X = decoder(latent_d_x, st_latent_d_x, norm='instance', scope=D_Decoder_scope, b_use_style=True, b_train=B_TRAIN)
-    else:
-        D_X = decoder(latent_d_x, s_disc_x, norm='instance', scope=D_Decoder_scope, b_use_style=use_style, b_train=B_TRAIN)
+
+        d_loss_x_dx = get_residual_loss(X_IN, D_X, type='l1')
+        d_loss_gx_dgx = get_residual_loss(G_X, D_GX, type='l1')
+        g_loss_x_gx = get_residual_loss(X_IN, G_X, type='l1')
+        g_loss_gx_dgx = get_residual_loss(G_X, D_GX, type='l1')
+
+        # Simple Balance Mode
+        sigmoid_d_loss_gx_dgx = 1 - layers.sigmoid(d_loss_gx_dgx, slope=2.0)
+        sigmoid_g_loss_gx_dgx = layers.sigmoid(g_loss_gx_dgx, slope=2.0)
+
+        disc_loss = alpha * d_loss_x_dx - sigmoid_d_loss_gx_dgx * d_loss_gx_dgx
+        gen_loss = alpha * g_loss_x_gx + sigmoid_g_loss_gx_dgx * g_loss_gx_dgx
+
+        sparsity_reg_loss = sparsity * (get_residual_loss(attention_d_x, None, type='entropy') + get_residual_loss(attention_g, None, type='entropy'))
+        sparsity_reg_loss = sparsity_reg_loss + sparsity * (get_residual_loss(st_attention_d_x, None, type='entropy') + get_residual_loss(st_attention_g, None, type='entropy'))
+
+        # Variable Define
+        generator_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=G_Encoder_scope) + \
+                         tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=G_Decoder_scope) + \
+                         tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=G_M_scope) + \
+                         tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=GS_M_scope)
+
+        discriminator_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=D_Encoder_scope) + \
+                             tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=D_Decoder_scope) + \
+                             tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=D_M_scope) + \
+                             tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=DS_M_scope)
+
+        memory_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=G_M_scope) + \
+                      tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=GS_M_scope) + \
+                      tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=D_M_scope) + \
+                      tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=DS_M_scope)
+
+        sparsity_reg_vars = [v for v in memory_vars if 'mem_vars' in v.name]
+
+        # Optimizer
+        discriminator_optimizer = tf.train.AdamOptimizer(learning_rate=LR).minimize(disc_loss, var_list=discriminator_vars)
+        generator_optimizer = tf.train.AdamOptimizer(learning_rate=LR).minimize(gen_loss, var_list=generator_vars)
+        sparsity_reg_optimizer = tf.train.AdamOptimizer(learning_rate=LR).minimize(sparsity_reg_loss, var_list=sparsity_reg_vars)
 
     config = tf.ConfigProto(allow_soft_placement=True)
     config.gpu_options.allow_growth = True
-
-    learning_rate = 1e-4
-
-    # Loss Define
-    sparsity = 2e-4
-
-    d_loss_x_dx = get_residual_loss(X_IN, D_X, type='l1', alpha=alpha)
-    d_loss_gx_dgx = get_random_box_residual_loss(G_X, D_GX, num_box=10, num_batches=batch_size, box_size=(24, 24))
-    g_loss_x_gx = get_residual_loss(X_IN, G_X, type='l1', alpha=alpha)
-    g_loss_gx_dgx = get_random_box_residual_loss(G_X, D_GX, num_box=10, num_batches=batch_size, box_size=(24, 24))
-
-    # Simple Balance Mode
-    sigmoid_d_loss_gx_dgx = 1 - layers.sigmoid(d_loss_gx_dgx)
-    sigmoid_g_loss_gx_dgx = layers.sigmoid(d_loss_gx_dgx)
-
-    disc_loss = d_loss_x_dx - sigmoid_d_loss_gx_dgx * d_loss_gx_dgx
-    gen_loss = g_loss_x_gx + sigmoid_g_loss_gx_dgx * g_loss_gx_dgx
-
-    sparsity_reg_loss = sparsity * (get_residual_loss(attention_d_x, None, type='entropy') + get_residual_loss(attention_g, None, type='entropy'))
-
-    if use_style_mem is True:
-        sparsity_reg_loss = sparsity_reg_loss + sparsity * get_residual_loss(st_attention_d_x, None, type='entropy')
-
-    if use_style_mem is True:
-        sparsity_reg_loss = sparsity_reg_loss + sparsity * get_residual_loss(st_attention_g, None, type='entropy')
-
-    # Variable Define
-    generator_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=G_Encoder_scope) + \
-                     tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=G_Decoder_scope) + \
-                     tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=G_M_scope) + \
-                     tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=GS_M_scope)
-
-    discriminator_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=D_Encoder_scope) + \
-                         tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=D_Decoder_scope) + \
-                         tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=D_M_scope) + \
-                         tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=DS_M_scope)
-
-    memory_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=G_M_scope) + \
-                  tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=GS_M_scope) + \
-                  tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=D_M_scope) + \
-                  tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=DS_M_scope)
-
-    sparsity_reg_vars = [v for v in memory_vars if 'mem_vars' in v.name]
-
-    # Optimizer
-    discriminator_optimizer = tf.train.AdamOptimizer(learning_rate=LR).minimize(disc_loss, var_list=discriminator_vars)
-    generator_optimizer = tf.train.AdamOptimizer(learning_rate=LR).minimize(gen_loss, var_list=generator_vars)
-    sparsity_reg_optimizer = tf.train.AdamOptimizer(learning_rate=LR).minimize(sparsity_reg_loss, var_list=sparsity_reg_vars)
 
     with tf.Session(config=config) as sess:
         sess.run(tf.global_variables_initializer())
@@ -377,10 +384,13 @@ def train(model_path='None'):
         tr_dir = train_data
         tr_files = os.listdir(tr_dir)
 
+        te_dir = test_data
+        te_files = os.listdir(te_dir)
+
         total_input_size = len(tr_files)
         total_steps = (total_input_size * num_epoch * 1.0)
         cur_step = 0
-        warmup_epoch = 10
+        warmup_epoch = 2
 
         for e in range(num_epoch):
             tr_files = shuffle(tr_files)
@@ -399,25 +409,36 @@ def train(model_path='None'):
                     if e == warmup_epoch:
                         cur_step = 1
                         total_steps = (total_input_size * (num_epoch - warmup_epoch) * 1.0)
+                    update_steps = 10 * (cur_step // 10) # per 10 steps
+                    lr = np.max([min_learning_rate, learning_rate * np.cos((np.pi * 7.0 / 16.0) * (update_steps / total_steps))])
 
-                    lr = learning_rate * np.cos((np.pi * 7.0 / 16.0) * (cur_step / total_steps))
+                if use_generator_only is True:
+                    _, g_loss, g_x_imgs = sess.run([generator_optimizer, gen_loss, G_X], feed_dict={X_IN: batch_imgs, LR: lr, B_TRAIN: True})
+                    _ = sess.run([sparsity_reg_optimizer], feed_dict={X_IN: batch_imgs, LR: lr, B_TRAIN: True})
 
-                _, d_loss, d_x_imgs, d_x_dx, d_gx_dgx = sess.run([discriminator_optimizer, disc_loss, D_X, d_loss_x_dx, d_loss_gx_dgx], feed_dict={X_IN: batch_imgs, LR: lr, B_TRAIN: True})
-                _, g_loss, g_x_imgs, g_x_gx = sess.run([generator_optimizer, gen_loss, G_X, g_loss_x_gx], feed_dict={X_IN: batch_imgs, LR: lr, B_TRAIN: True})
-                _ = sess.run([sparsity_reg_optimizer], feed_dict={X_IN: batch_imgs, LR: lr, B_TRAIN: True})
+                    print('epoch: ' + str(e) + ', g_loss: ' + str(g_loss))
 
-                print('epoch: ' + str(e) + ', ' +
-                      'd_loss: ' + str(d_loss) + ', d_x_dx: ' + str(d_x_dx) + ', d_gx_dgx: ' + str(d_gx_dgx) +
-                      ', ' + 'g_loss: ' + str(g_loss) +
-                      ', g_x_gx: ' + str(g_x_gx))
+                    if itr % 10 == 0:
+                        g_images = g_x_imgs[0] * 255.0
+                        cv2.imwrite(out_dir + '/g_' + tr_files[start], g_images)
+                        print('Elapsed Time at  ' + str(cur_step) + '/' + str(total_steps) + ' steps, ' + str(time.time() - train_start_time) + ' sec')
+                else:
+                    _, d_loss, d_x_imgs, d_x_dx, d_gx_dgx = sess.run([discriminator_optimizer, disc_loss, D_X, d_loss_x_dx, d_loss_gx_dgx], feed_dict={X_IN: batch_imgs, LR: lr, B_TRAIN: True})
+                    _, g_loss, g_x_imgs, g_x_gx = sess.run([generator_optimizer, gen_loss, G_X, g_loss_x_gx], feed_dict={X_IN: batch_imgs, LR: lr, B_TRAIN: True})
+                    _ = sess.run([sparsity_reg_optimizer], feed_dict={X_IN: batch_imgs, LR: lr, B_TRAIN: True})
 
-                if itr % 10 == 0:
-                    d_images = d_x_imgs[0] * 255.0
-                    g_images = g_x_imgs[0] * 255.0
+                    print('epoch: ' + str(e) + ', ' +
+                          'd_loss: ' + str(d_loss) + ', d_x_dx: ' + str(d_x_dx) + ', d_gx_dgx: ' + str(d_gx_dgx) +
+                          ', ' + 'g_loss: ' + str(g_loss) +
+                          ', g_x_gx: ' + str(g_x_gx))
 
-                    cv2.imwrite(out_dir + '/d_' + tr_files[start], d_images)
-                    cv2.imwrite(out_dir + '/g_' + tr_files[start], g_images)
-                    print('Elapsed Time at  ' + str(cur_step) + '/' + str(total_steps) + ' steps, ' + str(time.time() - train_start_time) + ' sec')
+                    if itr % 10 == 0:
+                        d_images = d_x_imgs[0] * 255.0
+                        g_images = g_x_imgs[0] * 255.0
+
+                        cv2.imwrite(out_dir + '/d_' + tr_files[start], d_images)
+                        cv2.imwrite(out_dir + '/g_' + tr_files[start], g_images)
+                        print('Elapsed Time at  ' + str(cur_step) + '/' + str(total_steps) + ' steps, ' + str(time.time() - train_start_time) + ' sec')
             try:
                 print('Saving model...')
                 saver.save(sess, model_path)
@@ -425,6 +446,23 @@ def train(model_path='None'):
             except:
                 print('Save failed')
             print('Training Time: ' + str(time.time() - train_start_time))
+
+            total_test_size = len(te_files)
+            test_batch = zip(range(0, total_test_size, batch_size),
+                             range(batch_size, total_test_size + 1, batch_size))
+
+            for start, end in test_batch:
+                test_imgs = load_images(te_files[start:end], base_dir=te_dir)
+                if use_generator_only is True:
+                    gx_imgs = sess.run([G_X], feed_dict={X_IN: test_imgs, B_TRAIN: False})
+                    for i in range(batch_size):
+                        cv2.imwrite('out/gx_' + te_files[start + i], gx_imgs[i] * 255.0)
+                else:
+                    dgx_imgs, gx_imgs, dx_imgs = sess.run([D_GX, G_X, D_X], feed_dict={X_IN: test_imgs, B_TRAIN: False})
+                    for i in range(batch_size):
+                        cv2.imwrite('out/dgx_' + te_files[start + i], dgx_imgs[i] * 255.0)
+                        cv2.imwrite('out/gx_' + te_files[start + i], gx_imgs[i] * 255.0)
+                        cv2.imwrite('out/dx_' + te_files[start + i], dx_imgs[i] * 255.0)
 
 
 def calculate_anomaly_scores(imgs1, imgs2, pixel_max=1.0):
@@ -455,36 +493,26 @@ def test(model_path):
     # Generator
     z_gen, s_gen = encoder(X_IN, norm='instance', b_use_style=use_style, scope=G_Encoder_scope, b_train=B_TRAIN)
     attention_g, latent_g = memory(z_gen, scope=G_M_scope)
+    st_attention_g, st_latent_g = memory(s_gen, scope=GS_M_scope)
+    G_X = decoder(latent_g, st_latent_g, norm='instance', scope=G_Decoder_scope, b_use_style=True, b_train=B_TRAIN)
 
-    if use_style_mem is True:
-        st_attention_g, st_latent_g = memory(s_gen, scope=GS_M_scope)
-        G_X = decoder(latent_g, st_latent_g, norm='instance', scope=G_Decoder_scope, b_use_style=True, b_train=B_TRAIN)
-    else:
-        G_X = decoder(latent_g, s_gen, norm='instance', scope=G_Decoder_scope, b_use_style=use_style, b_train=B_TRAIN)
+    if use_generator_only is False:
+        z_disc_gx, s_disc_gx = encoder(G_X, norm='instance', b_use_style=use_style, scope=D_Encoder_scope,
+                                       b_train=B_TRAIN)
+        attention_d_gx, latent_d_gx = memory(z_disc_gx, scope=D_M_scope)
 
-    # Discriminator
-    z_disc_gx, s_disc_gx = encoder(G_X, norm='instance', b_use_style=use_style, scope=D_Encoder_scope, b_train=B_TRAIN)
-    attention_d_gx, latent_d_gx = memory(z_disc_gx, scope=D_M_scope)
-
-    if use_style_mem is True:
         st_attention_d_gx, st_latent_d_gx = memory(s_disc_gx, scope=DS_M_scope)
         D_GX = decoder(latent_d_gx, st_latent_d_gx, norm='instance', scope=D_Decoder_scope, b_use_style=True,
                        b_train=B_TRAIN)
-    else:
-        D_GX = decoder(latent_d_gx, s_disc_gx, norm='instance', scope=D_Decoder_scope, b_use_style=use_style,
-                       b_train=B_TRAIN)
-
-    z_disc_x, s_disc_x = encoder(X_IN, norm='instance', b_use_style=use_style, scope=D_Encoder_scope, b_train=B_TRAIN)
-    attention_d_x, latent_d_x = memory(z_disc_x, scope=D_M_scope)
-
-    if use_style_mem is True:
+        z_disc_x, s_disc_x = encoder(X_IN, norm='instance', b_use_style=use_style, scope=D_Encoder_scope,
+                                     b_train=B_TRAIN)
+        attention_d_x, latent_d_x = memory(z_disc_x, scope=D_M_scope)
         st_attention_d_x, st_latent_d_x = memory(s_disc_x, scope=DS_M_scope)
         D_X = decoder(latent_d_x, st_latent_d_x, norm='instance', scope=D_Decoder_scope, b_use_style=True,
                       b_train=B_TRAIN)
+        anomaly_score = calculate_anomaly_scores(X_IN, D_GX)
     else:
-        D_X = decoder(latent_d_x, s_disc_x, norm='instance', scope=D_Decoder_scope, b_use_style=use_style, b_train=B_TRAIN)
-
-    anomaly_score = calculate_anomaly_scores(X_IN, D_GX)
+        anomaly_score = calculate_anomaly_scores(X_IN, G_X)
 
     # tf.image.rgb_to_grayscale
     config = tf.ConfigProto(allow_soft_placement=True)
@@ -510,13 +538,20 @@ def test(model_path):
 
         for start, end in test_batch:
             test_imgs = load_images(te_files[start:end], base_dir=te_dir)
-            scores, dgx_imgs, gx_imgs, dx_imgs = sess.run([anomaly_score, D_GX, G_X, D_X],
-                                                   feed_dict={X_IN: test_imgs, B_TRAIN: False})
-            for i in range(batch_size):
-                print('Anomaly Score ' + te_files[start + i] + ': ' + str(scores[i]))
-                cv2.imwrite(out_dir + '/dgx_' + te_files[start + i], dgx_imgs[i] * 255.0)
-                cv2.imwrite(out_dir + '/gx_' + te_files[start + i], gx_imgs[i] * 255.0)
-                cv2.imwrite(out_dir + '/dx_' + te_files[start + i], dx_imgs[i] * 255.0)
+            if use_generator_only is True:
+                scores, gx_imgs = sess.run([anomaly_score, G_X],
+                                                              feed_dict={X_IN: test_imgs, B_TRAIN: False})
+                for i in range(batch_size):
+                    print('Anomaly Score ' + te_files[start + i] + ': ' + str(scores[i]))
+                    cv2.imwrite(out_dir + '/gx_' + te_files[start + i], gx_imgs[i] * 255.0)
+            else:
+                scores, dgx_imgs, gx_imgs, dx_imgs = sess.run([anomaly_score, D_GX, G_X, D_X],
+                                                       feed_dict={X_IN: test_imgs, B_TRAIN: False})
+                for i in range(batch_size):
+                    print('Anomaly Score ' + te_files[start + i] + ': ' + str(scores[i]))
+                    cv2.imwrite(out_dir + '/dgx_' + te_files[start + i], dgx_imgs[i] * 255.0)
+                    cv2.imwrite(out_dir + '/gx_' + te_files[start + i], gx_imgs[i] * 255.0)
+                    cv2.imwrite(out_dir + '/dx_' + te_files[start + i], dx_imgs[i] * 255.0)
 
 
 if __name__ == '__main__':
@@ -546,17 +581,18 @@ if __name__ == '__main__':
     alpha = args.alpha
 
     unit_block_depth = 32
-    decoder_int_filter_size = 16
+    decoder_int_filter_size = max([input_width // 32, 8])
     downsample_num = int(np.log2(input_width // decoder_int_filter_size))
     upsample_num = downsample_num
-    bottleneck_num = 8
+    bottleneck_num = 18
     query_dimension = 128
     style_dimension = 128
     representation_dimension = query_dimension
-    aug_mem_size = 1000
+    aug_mem_size = 500
     num_channel = 3
     use_style = True
     use_style_mem = True
+    use_generator_only = False
 
     if mode == 'train':
         train(model_path)
