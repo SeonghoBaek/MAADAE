@@ -585,8 +585,8 @@ if __name__ == '__main__':
     downsample_num = int(np.log2(input_width // decoder_int_filter_size))
     upsample_num = downsample_num
     bottleneck_num = 18
-    query_dimension = 128
-    style_dimension = 128
+    query_dimension = min([decoder_int_filter_size * decoder_int_filter_size, 128])
+    style_dimension = query_dimension
     representation_dimension = query_dimension
     aug_mem_size = 500
     num_channel = 3
