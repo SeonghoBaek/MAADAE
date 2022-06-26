@@ -3,20 +3,9 @@
 # e-mail: seonghobaek@gmail.com
 
 
-import tensorflow as tf
-import numpy as np
-import os
-import cv2
-from sklearn.utils import shuffle
-import util
-import layers
-import argparse
-import time
-
 # scope
 G_Encoder_scope = 'generator_encoder'
 G_Decoder_scope = 'generator_decoder'
-G_Disc_scope = 'g_discriminator'
 D_Encoder_scope = 'discriminator_encoder'
 D_Decoder_scope = 'discriminator_decoder'
 G_M_scope = 'generator_mem'
@@ -127,34 +116,34 @@ def get_discriminator_loss(real, fake, type='wgan', gamma=1.0):
         return tf.reduce_mean((real - fake) ** 2)
 
 
-def encoder(in_tensor, activation=tf.nn.relu, norm='batch', b_use_style=False, scope='encoder', b_train=False):
+def encoder(in_tensor, activation=tf.nn.relu, norm='batch', b_use_style=False, scope='encoder', b_train=False, b_disc=False):
     with tf.variable_scope(scope, reuse=tf.AUTO_REUSE):
         print(scope + ' encoder input: ' + str(in_tensor.get_shape().as_list()))
 
         # Style Encoder
         block_depth = unit_block_depth
 
+        if b_disc is True:
+            block_depth = block_depth // 2
+
         if b_use_style is True:
-            s = layers.conv(in_tensor, scope='style_init', filter_dims=[7, 7, block_depth],
-                            stride_dims=[1, 1], non_linear_fn=activation, padding='REFL', pad=1)
+            s = layers.conv(in_tensor, scope='style_init', filter_dims=[5, 5, block_depth],
+                            stride_dims=[1, 1], non_linear_fn=activation)
 
-            enc_dn_num = downsample_num
+            for i in range(downsample_num):
+                block_depth = block_depth * 2
 
-            for i in range(enc_dn_num):
-                block_depth = block_depth + unit_block_depth
-                s = layers.blur_pooling2d(s, kernel_size=5, scope='style_blur_' + str(i), padding='REFL')
-                s = layers.conv(s, scope='style_downsapmple_' + str(i), filter_dims=[1, 1, block_depth],
-                                stride_dims=[1, 1], non_linear_fn=None, bias=False)
-                #s = layers.conv_normalize(s, norm=norm, b_train=b_train, scope='style_norm_' + str(i))
+                if use_blurpooling2d is True:
+                    s = layers.blur_pooling2d(s, kernel_size=5, scope='style_blur_' + str(i))
+                    s = layers.conv(s, scope='style_downsapmple_' + str(i), filter_dims=[3, 3, block_depth],
+                                    stride_dims=[1, 1], non_linear_fn=None)
+                else:
+                    s = layers.conv(s, scope='style_downsapmple_' + str(i), filter_dims=[3, 3, block_depth],
+                                    stride_dims=[2, 2], non_linear_fn=None)
+                # Do not use normalizing at downsample and upsample. This remove useful local features.
+                # s = layers.conv_normalize(s, norm='layer', b_train=b_train, scope='style_norm_' + str(i))
                 s = activation(s)
-                '''
-                block_depth = block_depth + unit_block_depth
-                s = layers.conv(s, scope='style_downsapmple_' + str(i), filter_dims=[3, 3, block_depth],
-                                stride_dims=[2, 2], non_linear_fn=None, bias=False)
-                # Bad for style extraction
-                # s = layers.conv_normalize(s, norm='batch', b_train=b_train, scope='style_norm_' + str(i))
-                s = activation(s)
-                '''
+
                 print(scope + ' Style Downsample Block ' + str(i) + ': ' + str(s.get_shape().as_list()))
 
             style_query = layers.global_avg_pool(s, style_dimension, scope='sgap')
@@ -164,51 +153,49 @@ def encoder(in_tensor, activation=tf.nn.relu, norm='batch', b_use_style=False, s
 
         # Contents Encoder
         block_depth = unit_block_depth
-        l = layers.conv(in_tensor, scope='contents_init', filter_dims=[7, 7, block_depth],
-                        stride_dims=[1, 1], non_linear_fn=activation, padding='REFL', pad=1)
+        if b_disc is True:
+            block_depth = block_depth // 2
 
-        enc_dn_num = downsample_num
+        l = layers.conv(in_tensor, scope='contents_init', filter_dims=[5, 5, block_depth], stride_dims=[1, 1], non_linear_fn=activation)
+
         # Downsample stage.
-        for i in range(enc_dn_num):
-            block_depth = block_depth + unit_block_depth
-            l = layers.blur_pooling2d(l, kernel_size=5, scope='blur_' + str(i), padding='REFL')
-            l = layers.conv(l, scope='downsapmple_' + str(i), filter_dims=[1, 1, block_depth],
-                            stride_dims=[1, 1], non_linear_fn=None)
-            l = layers.conv_normalize(l, norm=norm, b_train=b_train, scope='norm_' + str(i))
+        for i in range(downsample_num):
+            block_depth = block_depth * 2
+            if use_blurpooling2d is True:
+                l = layers.blur_pooling2d(l, kernel_size=5, scope='blur_' + str(i))
+                l = layers.conv(l, scope='downsapmple_' + str(i), filter_dims=[3, 3, block_depth], stride_dims=[1, 1], non_linear_fn=None)
+            else:
+                l = layers.conv(l, scope='downsapmple_' + str(i), filter_dims=[3, 3, block_depth], stride_dims=[2, 2], non_linear_fn=None)
+
+            # Do not use normalizing at downsampling and upsampling. This remove useful local features.
+            #l = layers.conv_normalize(l, norm='layer', b_train=b_train, scope='norm_' + str(i))
             l = activation(l)
-            '''
-            l = layers.conv(l, scope='downsapmple_' + str(i), filter_dims=[3, 3, block_depth],
-                            stride_dims=[2, 2], non_linear_fn=None)
-            l = layers.conv_normalize(l, norm=norm, b_train=b_train, scope='norm_' + str(i))
-            l = activation(l)
-            '''
+
             print(scope + ' Downsample Block ' + str(i) + ': ' + str(l.get_shape().as_list()))
 
         # Bottleneck stage
         for i in range(bottleneck_num):
             print(scope + ' Bottleneck Block : ' + str(l.get_shape().as_list()))
-            l = layers.add_se_residual_block(l, filter_dims=[7, 7, block_depth], act_func=activation,
-                                             norm=norm, b_train=b_train, use_dilation=False, scope='bt_block_' + str(i), padding='REFL', pad=3)
-
+            l = layers.add_se_residual_block(l, filter_dims=[3, 3, block_depth], act_func=activation,
+                                             norm=norm, b_train=b_train, use_dilation=False, scope='bt_block_' + str(i), padding='REFL', pad=1)
         content_query = layers.global_avg_pool(l, query_dimension, scope='gap')
         print(scope + ' content latent dimension : ' + str(content_query.get_shape().as_list()))
 
     return content_query, style_query
 
 
-def decoder(content, style, activation=tf.nn.relu, norm='batch', scope='decoder', b_use_style=False, b_train=False):
+def decoder(content, style, activation=tf.nn.relu, norm='batch', scope='decoder', b_use_style=False, b_train=False, b_disc=False):
     with tf.variable_scope(scope, reuse=tf.AUTO_REUSE):
         print(scope + ' decoder input: ' + str(content.get_shape().as_list()))
         l = content
-        block_depth = unit_block_depth * (upsample_num + 1)
+        block_depth = unit_block_depth * (2**upsample_num)
 
-        # Update by image size for your own.
-         num_depth = 1
+        if b_disc is True:
+            block_depth = block_depth // 2
 
-        if query_dimension > decoder_int_filter_size * decoder_int_filter_size:
-            num_depth = int(query_dimension // (decoder_int_filter_size * decoder_int_filter_size))
-        l = layers.fc(l, decoder_int_filter_size * decoder_int_filter_size * num_depth, non_linear_fn=None, scope='fc1', use_bias=True)
+        num_depth = 1
         l = tf.reshape(l, shape=[-1, decoder_int_filter_size, decoder_int_filter_size, num_depth])
+        print('mem vector shape: ' + str(l.get_shape().as_list()))
         l = layers.conv(l, scope='init', filter_dims=[3, 3, block_depth], stride_dims=[1, 1], non_linear_fn=activation, padding='REFL', pad=1)
 
         # Style Parmaters
@@ -222,29 +209,29 @@ def decoder(content, style, activation=tf.nn.relu, norm='batch', scope='decoder'
 
         for i in range(bottleneck_num):
             if b_use_style is True:
-                l = layers.add_se_adain_residual_block(l, style_mu, style_var, filter_dims=[7, 7, block_depth], act_func=activation, use_dilation=False,
-                                                       scope=scope + '_bt_block_' + str(i), padding='REFL', pad=3)
+                l = layers.add_se_adain_residual_block(l, style_mu, style_var, filter_dims=[3, 3, block_depth], act_func=activation, use_dilation=False,
+                                                       scope=scope + '_bt_block_' + str(i), padding='REFL', pad=1)
             else:
-                l = layers.add_se_residual_block(l, filter_dims=[7, 7, block_depth], act_func=activation, norm=norm, b_train=b_train, use_dilation=False,
-                                                 scope='bt_block_' + str(i), padding='REFL', pad=3)
+                l = layers.add_se_residual_block(l, filter_dims=[3, 3, block_depth], act_func=activation, norm=norm, b_train=b_train, use_dilation=False,
+                                                 scope='bt_block_' + str(i), padding='REFL', pad=1)
 
             print(scope + ' Bottleneck Block : ' + str(l.get_shape().as_list()))
 
         # Upsample stage
-        for i in range(upsample_num):
+        for i in range(upsample_num-1):
             # ESPCN upsample
-            block_depth = block_depth - unit_block_depth
+            block_depth = block_depth // 2
             l = layers.conv(l, scope='espcn_' + str(i), filter_dims=[3, 3, block_depth * 2 * 2],
-                            stride_dims=[1, 1], non_linear_fn=None, padding='REFL', pad=1)
-            l = layers.conv_normalize(l, norm=norm, b_train=b_train, scope='espcn_norm_' + str(i))
-            l = activation(l)
-            l = layers.se_block(l, scope='se_' + str(i))
+                            stride_dims=[1, 1], non_linear_fn=None)
             l = tf.nn.depth_to_space(l, 2)
-
+            # Do not use normalizing at downsampling and upsampling. This remove useful local features.
+            #l = layers.conv_normalize(l, norm='layer', b_train=b_train, scope='espcn_norm_' + str(i))
+            l = activation(l)
             print(scope + ' Upsampling ' + str(i) + ': ' + str(l.get_shape().as_list()))
 
-        l = layers.conv(l, scope='last', filter_dims=[3, 3, num_channel], stride_dims=[1, 1],
-                        non_linear_fn=tf.nn.sigmoid, padding='REFL', pad=1)
+        l = layers.conv(l, scope='espcn', filter_dims=[3, 3, 3 * 2 * 2], stride_dims=[1, 1], non_linear_fn=None)
+        l = tf.nn.depth_to_space(l, 2)
+        l = tf.nn.sigmoid(l)
 
         print(scope + ' Output: ' + str(l.get_shape().as_list()))
     return l
@@ -263,10 +250,12 @@ def memory(query, scope='aug_mem'):
 
         distance = tf.matmul(norm_q, norm_mem, transpose_b=True)  # [B, Q]
 
-        # Adaptive Scaling
-        scale_alpha = layers.fc(query, aug_mem_size, non_linear_fn=None, scope='mem_linear_alpha', use_bias=True)
-        scale_beta = layers.fc(query, aug_mem_size, non_linear_fn=None, scope='mem_linear_beta', use_bias=True)
-        
+        # Simple Adaptive Scaling
+        scale_alpha = layers.fc(query, aug_mem_size//16, non_linear_fn=tf.nn.relu, scope='mem_linear_alpha1', use_bias=True)
+        scale_alpha = layers.fc(scale_alpha, aug_mem_size, non_linear_fn=tf.nn.sigmoid, scope='mem_linear_alpha2', use_bias=True)
+        scale_beta = layers.fc(query, aug_mem_size//16, non_linear_fn=tf.nn.relu, scope='mem_linear_beta1', use_bias=True)
+        scale_beta = layers.fc(scale_beta, aug_mem_size, non_linear_fn=tf.nn.sigmoid, scope='mem_linear_beta2', use_bias=True)
+
         distance = scale_alpha * distance + scale_beta  # [B, Q]
 
         sm = tf.nn.softmax(distance, axis=-1)  # [B, Q]
@@ -324,15 +313,10 @@ def train(model_path='None'):
         sparsity_reg_optimizer = tf.train.AdamOptimizer(learning_rate=LR).minimize(sparsity_reg_loss, var_list=sparsity_reg_vars)
     else:
         # Discriminator
-        z_disc_gx, s_disc_gx = encoder(G_X, norm='instance', b_use_style=use_style, scope=D_Encoder_scope, b_train=B_TRAIN)
-        attention_d_gx, latent_d_gx = memory(z_disc_gx, scope=D_M_scope)
-
-        st_attention_d_gx, st_latent_d_gx = memory(s_disc_gx, scope=DS_M_scope)
-        D_GX = decoder(latent_d_gx, st_latent_d_gx, norm='instance', scope=D_Decoder_scope, b_use_style=True, b_train=B_TRAIN)
-        z_disc_x, s_disc_x = encoder(X_IN, norm='instance', b_use_style=use_style, scope=D_Encoder_scope, b_train=B_TRAIN)
-        attention_d_x, latent_d_x = memory(z_disc_x, scope=D_M_scope)
-        st_attention_d_x, st_latent_d_x = memory(s_disc_x, scope=DS_M_scope)
-        D_X = decoder(latent_d_x, st_latent_d_x, norm='instance', scope=D_Decoder_scope, b_use_style=True, b_train=B_TRAIN)
+        z_disc_gx, s_disc_gx = encoder(G_X, norm='instance', b_use_style=use_style, scope=D_Encoder_scope, b_train=B_TRAIN, b_disc=True)
+        D_GX = decoder(z_disc_gx, s_disc_gx, norm='instance', scope=D_Decoder_scope, b_use_style=True, b_train=B_TRAIN, b_disc=True)
+        z_disc_x, s_disc_x = encoder(X_IN, norm='instance', b_use_style=use_style, scope=D_Encoder_scope, b_train=B_TRAIN, b_disc=True)
+        D_X = decoder(z_disc_x, s_disc_x, norm='instance', scope=D_Decoder_scope, b_use_style=True, b_train=B_TRAIN, b_disc=True)
 
         d_loss_x_dx = get_residual_loss(X_IN, D_X, type='l1')
         d_loss_gx_dgx = get_residual_loss(G_X, D_GX, type='l1')
@@ -340,14 +324,18 @@ def train(model_path='None'):
         g_loss_gx_dgx = get_residual_loss(G_X, D_GX, type='l1')
 
         # Simple Balance Mode
-        sigmoid_d_loss_gx_dgx = 1 - layers.sigmoid(d_loss_gx_dgx, slope=2.0)
-        sigmoid_g_loss_gx_dgx = layers.sigmoid(g_loss_gx_dgx, slope=2.0)
+        sigmoid_d_loss_gx_dgx = layers.sigmoid(0.5 * d_loss_gx_dgx - d_loss_x_dx, slope=2.0)
+        sigmoid_g_loss_gx_dgx = layers.sigmoid(0.5 * g_loss_gx_dgx - g_loss_x_gx, slope=2.0)
 
         disc_loss = alpha * d_loss_x_dx - sigmoid_d_loss_gx_dgx * d_loss_gx_dgx
         gen_loss = alpha * g_loss_x_gx + sigmoid_g_loss_gx_dgx * g_loss_gx_dgx
 
-        sparsity_reg_loss = sparsity * (get_residual_loss(attention_d_x, None, type='entropy') + get_residual_loss(attention_g, None, type='entropy'))
-        sparsity_reg_loss = sparsity_reg_loss + sparsity * (get_residual_loss(st_attention_d_x, None, type='entropy') + get_residual_loss(st_attention_g, None, type='entropy'))
+        lr_weight = layers.sigmoid(d_loss_x_dx - d_loss_gx_dgx, shift=0.05)
+        lr_d = LR * lr_weight
+        lr_g = LR * (tf.constant(1.0) - lr_weight)
+
+        sparsity_reg_loss = sparsity * get_residual_loss(attention_g, None, type='entropy')
+        sparsity_reg_loss = sparsity_reg_loss + sparsity * get_residual_loss(st_attention_g, None, type='entropy')
 
         # Variable Define
         generator_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=G_Encoder_scope) + \
@@ -356,20 +344,16 @@ def train(model_path='None'):
                          tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=GS_M_scope)
 
         discriminator_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=D_Encoder_scope) + \
-                             tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=D_Decoder_scope) + \
-                             tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=D_M_scope) + \
-                             tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=DS_M_scope)
+                             tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=D_Decoder_scope)
 
         memory_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=G_M_scope) + \
-                      tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=GS_M_scope) + \
-                      tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=D_M_scope) + \
-                      tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=DS_M_scope)
+                      tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=GS_M_scope)
 
         sparsity_reg_vars = [v for v in memory_vars if 'mem_vars' in v.name]
 
         # Optimizer
-        discriminator_optimizer = tf.train.AdamOptimizer(learning_rate=LR).minimize(disc_loss, var_list=discriminator_vars)
-        generator_optimizer = tf.train.AdamOptimizer(learning_rate=LR).minimize(gen_loss, var_list=generator_vars)
+        discriminator_optimizer = tf.train.AdamOptimizer(learning_rate=lr_d).minimize(disc_loss, var_list=discriminator_vars)
+        generator_optimizer = tf.train.AdamOptimizer(learning_rate=lr_g).minimize(gen_loss, var_list=generator_vars)
         sparsity_reg_optimizer = tf.train.AdamOptimizer(learning_rate=LR).minimize(sparsity_reg_loss, var_list=sparsity_reg_vars)
 
     config = tf.ConfigProto(allow_soft_placement=True)
@@ -394,7 +378,7 @@ def train(model_path='None'):
         total_input_size = len(tr_files)
         total_steps = (total_input_size * num_epoch * 1.0)
         cur_step = 0
-        warmup_epoch = 2
+        warmup_epoch = 0
 
         for e in range(num_epoch):
             tr_files = shuffle(tr_files)
@@ -440,7 +424,7 @@ def train(model_path='None'):
                         d_images = d_x_imgs[0] * 255.0
                         g_images = g_x_imgs[0] * 255.0
 
-                        cv2.imwrite(out_dir + '/d_' + tr_files[start], d_images)
+                        #cv2.imwrite(out_dir + '/d_' + tr_files[start], d_images)
                         cv2.imwrite(out_dir + '/g_' + tr_files[start], g_images)
                         print('Elapsed Time at  ' + str(cur_step) + '/' + str(total_steps) + ' steps, ' + str(time.time() - train_start_time) + ' sec')
             try:
@@ -463,10 +447,11 @@ def train(model_path='None'):
                         cv2.imwrite('out/gx_' + te_files[start + i], gx_imgs[i] * 255.0)
                 else:
                     dgx_imgs, gx_imgs, dx_imgs = sess.run([D_GX, G_X, D_X], feed_dict={X_IN: test_imgs, B_TRAIN: False})
+
                     for i in range(batch_size):
-                        cv2.imwrite('out/dgx_' + te_files[start + i], dgx_imgs[i] * 255.0)
+                        #cv2.imwrite('out/dgx_' + te_files[start + i], dgx_imgs[i] * 255.0)
                         cv2.imwrite('out/gx_' + te_files[start + i], gx_imgs[i] * 255.0)
-                        cv2.imwrite('out/dx_' + te_files[start + i], dx_imgs[i] * 255.0)
+                        #cv2.imwrite('out/dx_' + te_files[start + i], dx_imgs[i] * 255.0)
 
 
 def calculate_anomaly_scores(imgs1, imgs2, pixel_max=1.0):
@@ -501,24 +486,14 @@ def test(model_path):
     G_X = decoder(latent_g, st_latent_g, norm='instance', scope=G_Decoder_scope, b_use_style=True, b_train=B_TRAIN)
 
     if use_generator_only is False:
-        z_disc_gx, s_disc_gx = encoder(G_X, norm='instance', b_use_style=use_style, scope=D_Encoder_scope,
-                                       b_train=B_TRAIN)
-        attention_d_gx, latent_d_gx = memory(z_disc_gx, scope=D_M_scope)
-
-        st_attention_d_gx, st_latent_d_gx = memory(s_disc_gx, scope=DS_M_scope)
-        D_GX = decoder(latent_d_gx, st_latent_d_gx, norm='instance', scope=D_Decoder_scope, b_use_style=True,
-                       b_train=B_TRAIN)
-        z_disc_x, s_disc_x = encoder(X_IN, norm='instance', b_use_style=use_style, scope=D_Encoder_scope,
-                                     b_train=B_TRAIN)
-        attention_d_x, latent_d_x = memory(z_disc_x, scope=D_M_scope)
-        st_attention_d_x, st_latent_d_x = memory(s_disc_x, scope=DS_M_scope)
-        D_X = decoder(latent_d_x, st_latent_d_x, norm='instance', scope=D_Decoder_scope, b_use_style=True,
-                      b_train=B_TRAIN)
+        z_disc_gx, s_disc_gx = encoder(G_X, norm='instance', b_use_style=use_style, scope=D_Encoder_scope, b_train=B_TRAIN, b_disc=True)
+        D_GX = decoder(z_disc_gx, s_disc_gx, norm='instance', scope=D_Decoder_scope, b_use_style=True, b_train=B_TRAIN, b_disc=True)
+        z_disc_x, s_disc_x = encoder(X_IN, norm='instance', b_use_style=use_style, scope=D_Encoder_scope, b_train=B_TRAIN, b_disc=True)
+        D_X = decoder(z_disc_x, s_disc_x, norm='instance', scope=D_Decoder_scope, b_use_style=True, b_train=B_TRAIN, b_disc=True)
         anomaly_score = calculate_anomaly_scores(X_IN, D_GX)
     else:
         anomaly_score = calculate_anomaly_scores(X_IN, G_X)
 
-    # tf.image.rgb_to_grayscale
     config = tf.ConfigProto(allow_soft_placement=True)
     config.gpu_options.allow_growth = True
 
@@ -584,19 +559,20 @@ if __name__ == '__main__':
     num_epoch = args.epoch
     alpha = args.alpha
 
-    unit_block_depth = 32
-    decoder_int_filter_size = max([input_width // 32, 8])
+    unit_block_depth = 16
+    decoder_int_filter_size = 16
     downsample_num = int(np.log2(input_width // decoder_int_filter_size))
     upsample_num = downsample_num
-    bottleneck_num = 18
-    query_dimension = 128
-    style_dimension = 128
+    bottleneck_num = 4
+    query_dimension = 256
+    style_dimension = 256
     representation_dimension = query_dimension
     aug_mem_size = 500
     num_channel = 3
     use_style = True
     use_style_mem = True
     use_generator_only = False
+    use_blurpooling2d = False
 
     if mode == 'train':
         train(model_path)
