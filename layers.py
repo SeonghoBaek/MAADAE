@@ -561,15 +561,21 @@ def moments_for_layer_norm(x, axes=1, name=None):
 
 
 def layer_norm(x, scope="layer_norm", alpha_start=1.0, bias_start=0.0):
+    return tf.contrib.layers.layer_norm(x, center=True, scale=True, scope=scope)
     # derived from:
     # https://github.com/LeavesBreathe/tensorflow_with_latest_papers, but simplified.
+    '''
     with tf.variable_scope(scope, reuse=tf.AUTO_REUSE):
         input_dims = x.get_shape().as_list()
+        h = input_dims[1]
+        w = input_dims[2]
+        c = input_dims[3]
+        b = input_dims[0]
 
         if len(input_dims) != 2:
-            x = tf.reshape(x, [input_dims[0], -1])
+            x = tf.reshape(x, [-1, h*w*c])
 
-        num_units = x.get_shape().as_list()[1]
+        num_units = h*w*c
 
         alpha = tf.get_variable('alpha', [num_units],
                                 initializer=tf.constant_initializer(alpha_start), dtype=tf.float32)
@@ -580,12 +586,15 @@ def layer_norm(x, scope="layer_norm", alpha_start=1.0, bias_start=0.0):
         y = (alpha * (x - mean)) / (variance) + bias
 
         if len(input_dims) != 2:
-           y = tf.reshape(y, input_dims)
-
+           y = tf.reshape(y, [-1, h, w, c])
+    
     return y
+    '''
 
 
 def instance_norm(x, scope="instance_norm", alpha_start=1.0, bias_start=0.0):
+    return tf.contrib.layers.instance_norm(x, scope=scope)
+    '''
     with tf.variable_scope(scope, reuse=tf.AUTO_REUSE):
         input_dims = x.get_shape().as_list()
         h = input_dims[1]
@@ -601,7 +610,7 @@ def instance_norm(x, scope="instance_norm", alpha_start=1.0, bias_start=0.0):
         x = (x - mean) * tf.rsqrt(var + eps)
         y = alpha * x + bias
 
-        '''
+       
         g_c = c // num_grp
         x = tf.reshape(x, shape=[-1, num_grp, g_c, h, w])
         mean, var = tf.nn.moments(x, [2, 3, 4], keep_dims=True)
@@ -612,9 +621,9 @@ def instance_norm(x, scope="instance_norm", alpha_start=1.0, bias_start=0.0):
         x = (x - mean) * tf.rsqrt(var + eps)
         x = tf.reshape(x, [-1, h, w, c])
         y = alpha * x + bias
-        '''
-
+       
     return y
+    '''
 
 
 def AdaIN(x, s_mu, s_var, scope="adain"):
@@ -700,19 +709,19 @@ def add_se_adain_residual_block(in_layer, style_mu, style_var, filter_dims, act_
             dilation = [1, 2, 2, 1]
 
         # ResNext
-        l = depthwise_conv(l, filter_dims=[filter_dims[0], filter_dims[1]], stride_dims=[1, 1], non_linear_fn=None, padding=padding, pad=pad)
-        l = AdaIN(l, style_mu, style_var, scope='residual_adain1')
-        l = conv(l, scope='residual_invt_1', filter_dims=[1, 1, num_channel_out * 4], stride_dims=[1, 1], dilation=dilation, non_linear_fn=act_func, sn=False)
-        l = conv(l, scope='residual_invt_2', filter_dims=[1, 1, num_channel_out], stride_dims=[1, 1], dilation=dilation, non_linear_fn=None, sn=False)
+        #l = depthwise_conv(l, filter_dims=[filter_dims[0], filter_dims[1]], stride_dims=[1, 1], non_linear_fn=None, padding=padding, pad=pad)
+        #l = AdaIN(l, style_mu, style_var, scope='residual_adain1')
+        #l = conv(l, scope='residual_invt_1', filter_dims=[1, 1, num_channel_out * 4], stride_dims=[1, 1], dilation=dilation, non_linear_fn=act_func, sn=False)
+        #l = conv(l, scope='residual_invt_2', filter_dims=[1, 1, num_channel_out], stride_dims=[1, 1], dilation=dilation, non_linear_fn=None, sn=False)
 
         # Plain
-        #l = conv(l, scope='se_adain_res_conv', filter_dims=[filter_dims[0], filter_dims[1], num_channel_out], stride_dims=[1, 1],
-        #         dilation=dilation, non_linear_fn=None, bias=True, padding=padding, pad=pad)
-        #l = AdaIN(l, style_mu, style_var, scope='residual_adain2')
-        #l = act_func(l)
-        #l = conv(l, scope='se_adain_res_conv', filter_dims=[filter_dims[0], filter_dims[1], num_channel_out], stride_dims=[1, 1],
-        #         dilation=dilation, non_linear_fn=None, bias=True, padding=padding, pad=pad)
-        #l = AdaIN(l, style_mu, style_var, scope='residual_adain2')
+        l = conv(l, scope='se_adain_res_conv', filter_dims=[filter_dims[0], filter_dims[1], num_channel_out], stride_dims=[1, 1],
+                 dilation=dilation, non_linear_fn=None, bias=True, padding=padding, pad=pad)
+        l = AdaIN(l, style_mu, style_var, scope='residual_adain2')
+        l = act_func(l)
+        l = conv(l, scope='se_adain_res_conv', filter_dims=[filter_dims[0], filter_dims[1], num_channel_out], stride_dims=[1, 1],
+                 dilation=dilation, non_linear_fn=None, bias=True, padding=padding, pad=pad)
+        l = AdaIN(l, style_mu, style_var, scope='residual_adain2')
 
         # SE Path
         # Squeeze
@@ -754,16 +763,16 @@ def add_se_residual_block(in_layer, filter_dims, act_func=tf.nn.relu, norm='laye
             bn_depth = num_channel_out
 
         # ResNext
-        l = depthwise_conv(l, filter_dims=[filter_dims[0], filter_dims[1]], stride_dims=[1, 1], non_linear_fn=None, padding=padding, pad=pad)
-        l = conv_normalize(l, norm=norm, b_train=b_train, scope='norm')
-        l = conv(l, scope='residual_invt_1', filter_dims=[1, 1, bn_depth*4], stride_dims=[1, 1], dilation=dilation, non_linear_fn=act_func, sn=False)
-        l = conv(l, scope='residual_invt_2', filter_dims=[1, 1, bn_depth], stride_dims=[1, 1], dilation=dilation, non_linear_fn=None, sn=False)
+        #l = depthwise_conv(l, filter_dims=[filter_dims[0], filter_dims[1]], stride_dims=[1, 1], non_linear_fn=None, padding=padding, pad=pad)
+        #l = conv_normalize(l, norm=norm, b_train=b_train, scope='norm')
+        #l = conv(l, scope='residual_invt_1', filter_dims=[1, 1, bn_depth*4], stride_dims=[1, 1], dilation=dilation, non_linear_fn=act_func, sn=False)
+        #l = conv(l, scope='residual_invt_2', filter_dims=[1, 1, bn_depth], stride_dims=[1, 1], dilation=dilation, non_linear_fn=None, sn=False)
 
         # Plain
-        #l = add_residual_layer(l, filter_dims=[filter_dims[0], filter_dims[1], bn_depth], act_func=act_func, norm=norm, b_train=b_train,
-        #                       scope='residual_layer1', dilation=dilation, padding=padding, pad=pad)
-        #l = add_residual_layer(l, filter_dims=[filter_dims[0], filter_dims[1], bn_depth], act_func=None, norm=norm,
-        #                       b_train=b_train, scope='residual_layer2', dilation=dilation, padding=padding, pad=pad)
+        l = add_residual_layer(l, filter_dims=[filter_dims[0], filter_dims[1], bn_depth], act_func=act_func, norm=norm, b_train=b_train,
+                               scope='residual_layer1', dilation=dilation, padding=padding, pad=pad)
+        l = add_residual_layer(l, filter_dims=[filter_dims[0], filter_dims[1], bn_depth], act_func=None, norm=norm,
+                               b_train=b_train, scope='residual_layer2', dilation=dilation, padding=padding, pad=pad)
 
         if use_bottleneck is True:
             l = act_func(l)
@@ -976,5 +985,5 @@ class ConvGRUCell(tf.nn.rnn_cell.RNNCell):
         return h, h
 
 
-def sigmoid(x, slope=1.0):
-    return tf.constant(1.) / (tf.constant(1.) + tf.exp(-tf.constant(1.0)*(x*slope)))
+def sigmoid(x, slope=1.0, shift=0.0):
+    return tf.constant(1.) / (tf.constant(1.) + tf.exp(-tf.constant(1.0)*((x - shift)*slope)))
