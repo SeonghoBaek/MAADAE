@@ -715,11 +715,11 @@ def add_se_adain_residual_block(in_layer, style_mu, style_var, filter_dims, act_
         #l = conv(l, scope='residual_invt_2', filter_dims=[1, 1, num_channel_out], stride_dims=[1, 1], dilation=dilation, non_linear_fn=None, sn=False)
 
         # Plain
-        l = conv(l, scope='se_adain_res_conv', filter_dims=[filter_dims[0], filter_dims[1], num_channel_out], stride_dims=[1, 1],
+        l = conv(l, scope='se_adain_res_conv1', filter_dims=[filter_dims[0], filter_dims[1], num_channel_out], stride_dims=[1, 1],
                  dilation=dilation, non_linear_fn=None, bias=True, padding=padding, pad=pad)
-        l = AdaIN(l, style_mu, style_var, scope='residual_adain2')
+        l = AdaIN(l, style_mu, style_var, scope='residual_adain1')
         l = act_func(l)
-        l = conv(l, scope='se_adain_res_conv', filter_dims=[filter_dims[0], filter_dims[1], num_channel_out], stride_dims=[1, 1],
+        l = conv(l, scope='se_adain_res_conv2', filter_dims=[filter_dims[0], filter_dims[1], num_channel_out], stride_dims=[1, 1],
                  dilation=dilation, non_linear_fn=None, bias=True, padding=padding, pad=pad)
         l = AdaIN(l, style_mu, style_var, scope='residual_adain2')
 
