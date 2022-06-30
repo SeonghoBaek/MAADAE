@@ -159,7 +159,7 @@ def coord_conv(input, scope, filter_dims, stride_dims, padding='SAME',
     return conv(coord_tensor, scope, filter_dims, stride_dims, padding, non_linear_fn, dilation, bias, sn)
 
 
-def depthwise_conv(input, filter_dims, stride_dims, padding='SAME', pad=0, non_linear_fn=tf.nn.relu, bias=True, scope='depthwise_conv'):
+def depthwise_conv(input, filter_dims, stride_dims, padding='SAME', pad=0, non_linear_fn=tf.nn.relu, bias=False, scope='depthwise_conv'):
     input_dims = input.get_shape().as_list()
 
     assert (len(input_dims) == 4)  # batch_size, height, width, num_channels_in
@@ -204,7 +204,30 @@ def depthwise_conv(input, filter_dims, stride_dims, padding='SAME', pad=0, non_l
         return activation
 
 
-def conv(input, scope, filter_dims, stride_dims, padding='SAME', pad=0, non_linear_fn=tf.nn.relu, dilation=[1, 1, 1, 1], bias=True, sn=False):
+def group_conv(input, scope='group_conv', num_groups=2, padding='SAME', pad=1):
+    with tf.variable_scope(scope, reuse=tf.AUTO_REUSE):
+        B, H, W, C = input.get_shape().as_list()
+        num_channel_out = C
+        num_channel_in = C
+        num_channel_in_group = num_channel_in // num_groups
+        num_channel_out_group = num_channel_out // num_groups
+        l = input
+        l = tf.reshape(l, shape=[-1, H, W, num_groups, num_channel_in_group])
+        l = tf.transpose(l, perm=[3, 0, 1, 2, 4])
+        gl = l[0]
+        gl_conv = conv(gl, scope='gr_conv_0', filter_dims=[3, 3, num_channel_out_group],
+                       stride_dims=[1, 1], non_linear_fn=None, padding=padding, pad=pad)
+
+        for i in range(num_groups - 1):
+            gl = l[i + 1]
+            gl = conv(gl, scope='gr_conv_' + str(i + 1), filter_dims=[3, 3, num_channel_out_group],
+                      stride_dims=[1, 1], non_linear_fn=None, padding=padding, pad=pad)
+            gl_conv = tf.concat([gl_conv, gl], axis=-1)
+
+        return gl_conv
+
+
+def conv(input, scope, filter_dims, stride_dims, padding='SAME', pad=0, non_linear_fn=tf.nn.relu, dilation=[1, 1, 1, 1], bias=False, sn=False):
     input_dims = input.get_shape().as_list()
 
     assert (len(input_dims) == 4)  # batch_size, height, width, num_channels_in
@@ -341,12 +364,17 @@ def add_dense_layer(layer, filter_dims, act_func=tf.nn.relu, scope='dense_layer'
     return l
 
 
-def add_residual_layer(layer, filter_dims, act_func=tf.nn.relu, scope='residual_layer',
-                       norm='layer', b_train=False, use_bias=True, dilation=[1, 1, 1, 1], sn=False, padding='SAME', pad=0):
+def add_residual_layer(layer, filter_dims, act_func=tf.nn.relu, scope='residual_layer', num_groups=1,
+                       norm='layer', b_train=False, use_bias=False, dilation=[1, 1, 1, 1], sn=False, padding='SAME', pad=0):
     with tf.variable_scope(scope, reuse=tf.AUTO_REUSE):
         l = layer
-        l = conv(l, scope='conv', filter_dims=filter_dims, stride_dims=[1, 1],
-                 dilation=dilation, non_linear_fn=None, bias=use_bias, sn=sn, padding=padding, pad=pad)
+
+        if num_groups > 1:
+            l = group_conv(l, scope='gr_conv', num_groups=num_groups, padding=padding, pad=pad)
+
+        else:
+            l = conv(l, scope='conv', filter_dims=filter_dims, stride_dims=[1, 1],
+                     dilation=dilation, non_linear_fn=None, bias=use_bias, sn=sn, padding=padding, pad=pad)
 
         if norm is not None:
             l = conv_normalize(l, norm=norm, b_train=b_train, scope='norm')
@@ -698,7 +726,7 @@ def se_block(input, scope='squeeze_excitation'):
         return l
 
 
-def add_se_adain_residual_block(in_layer, style_mu, style_var, filter_dims, act_func=tf.nn.relu,
+def add_se_adain_residual_block(in_layer, style_alpha, style_beta, filter_dims, act_func=tf.nn.relu, num_groups=1,
                                 scope='se_adain_residual_block', use_dilation=False, padding='SAME', pad=0):
     with tf.variable_scope(scope, reuse=tf.AUTO_REUSE):
         l = in_layer
@@ -708,20 +736,26 @@ def add_se_adain_residual_block(in_layer, style_mu, style_var, filter_dims, act_
         if use_dilation is True:
             dilation = [1, 2, 2, 1]
 
+        bn_depth = num_channel_out // 4
+
+        # Bottle Neck Layer
+        l = conv(l, scope='bt_conv1', filter_dims=[1, 1, bn_depth], stride_dims=[1, 1], non_linear_fn=act_func)
+
         # ResNext
-        #l = depthwise_conv(l, filter_dims=[filter_dims[0], filter_dims[1]], stride_dims=[1, 1], non_linear_fn=None, padding=padding, pad=pad)
-        #l = AdaIN(l, style_mu, style_var, scope='residual_adain1')
+        #3l = depthwise_conv(l, filter_dims=[filter_dims[0], filter_dims[1]], stride_dims=[1, 1], non_linear_fn=None, padding=padding, pad=pad)
+        #l = AdaIN(l, style_alpha, style_beta, scope='residual_adain1')
         #l = conv(l, scope='residual_invt_1', filter_dims=[1, 1, num_channel_out * 4], stride_dims=[1, 1], dilation=dilation, non_linear_fn=act_func, sn=False)
         #l = conv(l, scope='residual_invt_2', filter_dims=[1, 1, num_channel_out], stride_dims=[1, 1], dilation=dilation, non_linear_fn=None, sn=False)
 
-        # Plain
-        l = conv(l, scope='se_adain_res_conv1', filter_dims=[filter_dims[0], filter_dims[1], num_channel_out], stride_dims=[1, 1],
-                 dilation=dilation, non_linear_fn=None, bias=True, padding=padding, pad=pad)
-        l = AdaIN(l, style_mu, style_var, scope='residual_adain1')
-        l = act_func(l)
-        l = conv(l, scope='se_adain_res_conv2', filter_dims=[filter_dims[0], filter_dims[1], num_channel_out], stride_dims=[1, 1],
-                 dilation=dilation, non_linear_fn=None, bias=True, padding=padding, pad=pad)
-        l = AdaIN(l, style_mu, style_var, scope='residual_adain2')
+        if num_groups > 1:
+            l = group_conv(l, scope='gr_conv1', num_groups=num_groups, padding=padding, pad=pad)
+            l = act_func(l)
+        else:
+            l = conv(l, scope='se_adain_res_conv1', filter_dims=[filter_dims[0], filter_dims[1], bn_depth], stride_dims=[1, 1],
+                     non_linear_fn=act_func, padding=padding, pad=pad)
+
+        l = conv(l, scope='bt_conv2', filter_dims=[1, 1, num_channel_out], stride_dims=[1, 1], non_linear_fn=None)
+        l = AdaIN(l, style_alpha, style_beta, scope='residual_adain2')
 
         # SE Path
         # Squeeze
@@ -741,7 +775,7 @@ def add_se_adain_residual_block(in_layer, style_mu, style_var, filter_dims, act_
 
 
 def add_se_residual_block(in_layer, filter_dims, act_func=tf.nn.relu, norm='layer', b_train=False, scope='residual_block', use_dilation=False,
-                          use_bottleneck=False, padding='SAME', pad=0):
+                          padding='SAME', pad=0, num_groups=1):
     with tf.variable_scope(scope, reuse=tf.AUTO_REUSE):
         l = in_layer
         num_channel_out = filter_dims[-1]
@@ -752,15 +786,8 @@ def add_se_residual_block(in_layer, filter_dims, act_func=tf.nn.relu, norm='laye
             dilation = [1, 2, 2, 1]
 
         # Bottle Neck Layer
-        if use_bottleneck is True:
-            bn_depth = num_channel_out // 2
-            l = conv(l, scope='bt_conv1', filter_dims=[1, 1, bn_depth], stride_dims=[1, 1],
-                     dilation=dilation,
-                     non_linear_fn=None, sn=False)
-            l = conv_normalize(l, norm=norm, b_train=b_train, scope='bt_norm1')
-            l = act_func(l)
-        else:
-            bn_depth = num_channel_out
+        bn_depth = num_channel_out // 4
+        l = conv(l, scope='bt_conv1', filter_dims=[1, 1, bn_depth], stride_dims=[1, 1], non_linear_fn=act_func)
 
         # ResNext
         #l = depthwise_conv(l, filter_dims=[filter_dims[0], filter_dims[1]], stride_dims=[1, 1], non_linear_fn=None, padding=padding, pad=pad)
@@ -769,15 +796,10 @@ def add_se_residual_block(in_layer, filter_dims, act_func=tf.nn.relu, norm='laye
         #l = conv(l, scope='residual_invt_2', filter_dims=[1, 1, bn_depth], stride_dims=[1, 1], dilation=dilation, non_linear_fn=None, sn=False)
 
         # Plain
-        l = add_residual_layer(l, filter_dims=[filter_dims[0], filter_dims[1], bn_depth], act_func=act_func, norm=norm, b_train=b_train,
-                               scope='residual_layer1', dilation=dilation, padding=padding, pad=pad)
-        l = add_residual_layer(l, filter_dims=[filter_dims[0], filter_dims[1], bn_depth], act_func=None, norm=norm,
-                               b_train=b_train, scope='residual_layer2', dilation=dilation, padding=padding, pad=pad)
-
-        if use_bottleneck is True:
-            l = act_func(l)
-            l = conv(l, scope='bt_conv2', filter_dims=[1, 1, num_channel_out], stride_dims=[1, 1], dilation=dilation, non_linear_fn=None, sn=False)
-            l = conv_normalize(l, norm=norm, b_train=b_train, scope='bt_norm2')
+        l = add_residual_layer(l, filter_dims=[filter_dims[0], filter_dims[1], bn_depth], act_func=act_func, norm=None, b_train=b_train,
+                               scope='residual_layer1', dilation=dilation, padding=padding, pad=pad, num_groups=num_groups)
+        l = conv(l, scope='bt_conv2', filter_dims=[1, 1, num_channel_out], stride_dims=[1, 1], non_linear_fn=None)
+        l = conv_normalize(l, norm=norm, b_train=b_train, scope='norm1')
 
         # SE Path
         # Squeeze
@@ -987,3 +1009,9 @@ class ConvGRUCell(tf.nn.rnn_cell.RNNCell):
 
 def sigmoid(x, slope=1.0, shift=0.0):
     return tf.constant(1.) / (tf.constant(1.) + tf.exp(-tf.constant(1.0)*((x - shift)*slope)))
+
+
+def up_sample(x, scale_factor=2):
+    _, h, w, _ = x.get_shape().as_list()
+    new_size = [h * scale_factor, w * scale_factor]
+    return tf.image.resize_nearest_neighbor(x, size=new_size)
