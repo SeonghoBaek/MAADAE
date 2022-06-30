@@ -3,6 +3,15 @@
 # e-mail: seonghobaek@gmail.com
 
 
+import tensorflow as tf
+import numpy as np
+import os
+import cv2
+from sklearn.utils import shuffle
+import layers
+import argparse
+import time
+
 # scope
 G_Encoder_scope = 'generator_encoder'
 G_Decoder_scope = 'generator_decoder'
@@ -127,7 +136,7 @@ def encoder(in_tensor, activation=tf.nn.relu, norm='batch', b_use_style=False, s
             block_depth = block_depth // 2
 
         if b_use_style is True:
-            s = layers.conv(in_tensor, scope='style_init', filter_dims=[5, 5, block_depth],
+            s = layers.conv(in_tensor, scope='style_init', filter_dims=[7, 7, block_depth],
                             stride_dims=[1, 1], non_linear_fn=activation)
 
             for i in range(downsample_num):
@@ -136,13 +145,10 @@ def encoder(in_tensor, activation=tf.nn.relu, norm='batch', b_use_style=False, s
                 if use_blurpooling2d is True:
                     s = layers.blur_pooling2d(s, kernel_size=5, scope='style_blur_' + str(i))
                     s = layers.conv(s, scope='style_downsapmple_' + str(i), filter_dims=[3, 3, block_depth],
-                                    stride_dims=[1, 1], non_linear_fn=None)
+                                    stride_dims=[1, 1], non_linear_fn=activation)
                 else:
                     s = layers.conv(s, scope='style_downsapmple_' + str(i), filter_dims=[3, 3, block_depth],
-                                    stride_dims=[2, 2], non_linear_fn=None)
-                # Do not use normalizing at downsample and upsample. This remove useful local features.
-                # s = layers.conv_normalize(s, norm='layer', b_train=b_train, scope='style_norm_' + str(i))
-                s = activation(s)
+                                    stride_dims=[2, 2], non_linear_fn=activation)
 
                 print(scope + ' Style Downsample Block ' + str(i) + ': ' + str(s.get_shape().as_list()))
 
@@ -156,81 +162,68 @@ def encoder(in_tensor, activation=tf.nn.relu, norm='batch', b_use_style=False, s
         if b_disc is True:
             block_depth = block_depth // 2
 
-        l = layers.conv(in_tensor, scope='contents_init', filter_dims=[5, 5, block_depth], stride_dims=[1, 1], non_linear_fn=activation)
+        l = layers.conv(in_tensor, scope='contents_init', filter_dims=[7, 7, block_depth], stride_dims=[1, 1], non_linear_fn=activation)
 
         # Downsample stage.
         for i in range(downsample_num):
             block_depth = block_depth * 2
             if use_blurpooling2d is True:
                 l = layers.blur_pooling2d(l, kernel_size=5, scope='blur_' + str(i))
-                l = layers.conv(l, scope='downsapmple_' + str(i), filter_dims=[3, 3, block_depth], stride_dims=[1, 1], non_linear_fn=None)
+                l = layers.conv(l, scope='downsapmple_' + str(i), filter_dims=[3, 3, block_depth], stride_dims=[1, 1], non_linear_fn=activation)
             else:
-                l = layers.conv(l, scope='downsapmple_' + str(i), filter_dims=[3, 3, block_depth], stride_dims=[2, 2], non_linear_fn=None)
-
-            # Do not use normalizing at downsampling and upsampling. This remove useful local features.
-            #l = layers.conv_normalize(l, norm='layer', b_train=b_train, scope='norm_' + str(i))
-            l = activation(l)
+                l = layers.conv(l, scope='downsapmple_' + str(i), filter_dims=[3, 3, block_depth], stride_dims=[2, 2], non_linear_fn=activation)
 
             print(scope + ' Downsample Block ' + str(i) + ': ' + str(l.get_shape().as_list()))
 
         # Bottleneck stage
         for i in range(bottleneck_num):
             print(scope + ' Bottleneck Block : ' + str(l.get_shape().as_list()))
-            l = layers.add_se_residual_block(l, filter_dims=[3, 3, block_depth], act_func=activation,
+            l = layers.add_se_residual_block(l, filter_dims=[3, 3, block_depth], act_func=activation, num_groups=enc_conv_num_groups,
                                              norm=norm, b_train=b_train, use_dilation=False, scope='bt_block_' + str(i), padding='REFL', pad=1)
+
         content_query = layers.global_avg_pool(l, query_dimension, scope='gap')
         print(scope + ' content latent dimension : ' + str(content_query.get_shape().as_list()))
 
     return content_query, style_query
 
 
-def decoder(content, style, activation=tf.nn.relu, norm='batch', scope='decoder', b_use_style=False, b_train=False, b_disc=False):
+def decoder(content, style, activation=tf.nn.relu, norm='instance', scope='decoder', b_use_style=False, b_train=False, b_disc=False):
     with tf.variable_scope(scope, reuse=tf.AUTO_REUSE):
         print(scope + ' decoder input: ' + str(content.get_shape().as_list()))
         l = content
-        block_depth = unit_block_depth * (2**upsample_num)
+
+        block_depth = unit_block_depth * (2 ** upsample_num)
+        decoder_bottleneck_num = bottleneck_num
 
         if b_disc is True:
             block_depth = block_depth // 2
 
-        num_depth = 1
-        l = tf.reshape(l, shape=[-1, decoder_int_filter_size, decoder_int_filter_size, num_depth])
         print('mem vector shape: ' + str(l.get_shape().as_list()))
+
+        l = tf.reshape(l, shape=[-1, bottleneck_feature_size, bottleneck_feature_size, 1])
         l = layers.conv(l, scope='init', filter_dims=[3, 3, block_depth], stride_dims=[1, 1], non_linear_fn=activation, padding='REFL', pad=1)
 
         # Style Parmaters
         if b_use_style is True:
             s = layers.fc(style, block_depth, non_linear_fn=activation, scope='style_linear1', use_bias=True)
             s = layers.fc(s, block_depth, non_linear_fn=activation, scope='style_linear2', use_bias=True)
-            style_mu = layers.fc(s, block_depth, non_linear_fn=None, scope='style_mu')
-            style_var = layers.fc(s, block_depth, non_linear_fn=None, scope='style_var')
-            style_mu = tf.reshape(style_mu, shape=[-1, 1, 1, block_depth])
-            style_var = tf.reshape(style_var, shape=[-1, 1, 1, block_depth])
+            style_alpha = layers.fc(s, block_depth, non_linear_fn=None, scope='style_mu')
+            style_beta = layers.fc(s, block_depth, non_linear_fn=None, scope='style_var')
+            style_alpha = tf.reshape(style_alpha, shape=[-1, 1, 1, block_depth])
+            style_beta = tf.reshape(style_beta, shape=[-1, 1, 1, block_depth])
 
-        for i in range(bottleneck_num):
+        for i in range(decoder_bottleneck_num):
             if b_use_style is True:
-                l = layers.add_se_adain_residual_block(l, style_mu, style_var, filter_dims=[3, 3, block_depth], act_func=activation, use_dilation=False,
-                                                       scope=scope + '_bt_block_' + str(i), padding='REFL', pad=1)
+                l = layers.add_se_adain_residual_block(l, style_alpha, style_beta, filter_dims=[3, 3, block_depth], act_func=activation, use_dilation=False,
+                                                       scope=scope + '_bt_block_' + str(i), padding='REFL', pad=1, num_groups=dec_conv_num_groups)
             else:
                 l = layers.add_se_residual_block(l, filter_dims=[3, 3, block_depth], act_func=activation, norm=norm, b_train=b_train, use_dilation=False,
-                                                 scope='bt_block_' + str(i), padding='REFL', pad=1)
+                                                 scope='bt_block_' + str(i), padding='REFL', pad=1, num_groups=dec_conv_num_groups)
 
             print(scope + ' Bottleneck Block : ' + str(l.get_shape().as_list()))
 
-        # Upsample stage
-        for i in range(upsample_num-1):
-            # ESPCN upsample
-            block_depth = block_depth // 2
-            l = layers.conv(l, scope='espcn_' + str(i), filter_dims=[3, 3, block_depth * 2 * 2],
-                            stride_dims=[1, 1], non_linear_fn=None)
-            l = tf.nn.depth_to_space(l, 2)
-            # Do not use normalizing at downsampling and upsampling. This remove useful local features.
-            #l = layers.conv_normalize(l, norm='layer', b_train=b_train, scope='espcn_norm_' + str(i))
-            l = activation(l)
-            print(scope + ' Upsampling ' + str(i) + ': ' + str(l.get_shape().as_list()))
-
-        l = layers.conv(l, scope='espcn', filter_dims=[3, 3, 3 * 2 * 2], stride_dims=[1, 1], non_linear_fn=None)
-        l = tf.nn.depth_to_space(l, 2)
+        l = layers.conv(l, scope='espcn', filter_dims=[3, 3, 3 * upsample_ratio * upsample_ratio], stride_dims=[1, 1], non_linear_fn=None)
+        l = tf.nn.depth_to_space(l, upsample_ratio)
         l = tf.nn.sigmoid(l)
 
         print(scope + ' Output: ' + str(l.get_shape().as_list()))
@@ -292,7 +285,7 @@ def train(model_path='None'):
     z_gen, s_gen = encoder(X_IN, norm='instance', b_use_style=use_style, scope=G_Encoder_scope, b_train=B_TRAIN)
     attention_g, latent_g = memory(z_gen, scope=G_M_scope)
     st_attention_g, st_latent_g = memory(s_gen, scope=GS_M_scope)
-    G_X = decoder(latent_g, st_latent_g, norm='instance', scope=G_Decoder_scope, b_use_style=True, b_train=B_TRAIN)
+    G_X = decoder(latent_g, st_latent_g, scope=G_Decoder_scope, b_use_style=True, b_train=B_TRAIN)
 
     if use_generator_only is True:
         gen_loss = get_residual_loss(X_IN, G_X, type='l1', alpha=alpha)
@@ -314,9 +307,9 @@ def train(model_path='None'):
     else:
         # Discriminator
         z_disc_gx, s_disc_gx = encoder(G_X, norm='instance', b_use_style=use_style, scope=D_Encoder_scope, b_train=B_TRAIN, b_disc=True)
-        D_GX = decoder(z_disc_gx, s_disc_gx, norm='instance', scope=D_Decoder_scope, b_use_style=True, b_train=B_TRAIN, b_disc=True)
+        D_GX = decoder(z_disc_gx, s_disc_gx, scope=D_Decoder_scope, b_use_style=True, b_train=B_TRAIN, b_disc=True)
         z_disc_x, s_disc_x = encoder(X_IN, norm='instance', b_use_style=use_style, scope=D_Encoder_scope, b_train=B_TRAIN, b_disc=True)
-        D_X = decoder(z_disc_x, s_disc_x, norm='instance', scope=D_Decoder_scope, b_use_style=True, b_train=B_TRAIN, b_disc=True)
+        D_X = decoder(z_disc_x, s_disc_x, scope=D_Decoder_scope, b_use_style=True, b_train=B_TRAIN, b_disc=True)
 
         d_loss_x_dx = get_residual_loss(X_IN, D_X, type='l1')
         d_loss_gx_dgx = get_residual_loss(G_X, D_GX, type='l1')
@@ -324,8 +317,8 @@ def train(model_path='None'):
         g_loss_gx_dgx = get_residual_loss(G_X, D_GX, type='l1')
 
         # Simple Balance Mode
-        sigmoid_d_loss_gx_dgx = layers.sigmoid(0.5 * d_loss_gx_dgx - d_loss_x_dx, slope=2.0)
-        sigmoid_g_loss_gx_dgx = layers.sigmoid(0.5 * g_loss_gx_dgx - g_loss_x_gx, slope=2.0)
+        sigmoid_d_loss_gx_dgx = layers.sigmoid(d_loss_x_dx - 0.5 * d_loss_gx_dgx, slope=2.0)
+        sigmoid_g_loss_gx_dgx = layers.sigmoid(g_loss_gx_dgx - g_loss_x_gx)
 
         disc_loss = alpha * d_loss_x_dx - sigmoid_d_loss_gx_dgx * d_loss_gx_dgx
         gen_loss = alpha * g_loss_x_gx + sigmoid_g_loss_gx_dgx * g_loss_gx_dgx
@@ -559,20 +552,34 @@ if __name__ == '__main__':
     num_epoch = args.epoch
     alpha = args.alpha
 
-    unit_block_depth = 16
-    decoder_int_filter_size = 16
-    downsample_num = int(np.log2(input_width // decoder_int_filter_size))
+    # small size
+    #unit_block_depth = 16
+    #bottleneck_num = 4
+
+    # medium size
+    unit_block_depth = 32
+    bottleneck_num = 12
+
+    # large size
+    #unit_block_depth = 64
+    #bottleneck_num = 12
+
+    enc_conv_num_groups = 4
+    dec_conv_num_groups = 4
+    upsample_ratio = 16  # input_width % upsample_ratio = 0
+    bottleneck_feature_size = input_width // upsample_ratio
+    downsample_num = int(np.log2(upsample_ratio))
     upsample_num = downsample_num
-    bottleneck_num = 4
-    query_dimension = 256
-    style_dimension = 256
+    query_dimension = 1024
+    style_dimension = 1024
     representation_dimension = query_dimension
-    aug_mem_size = 500
+    aug_mem_size = 1000
     num_channel = 3
     use_style = True
     use_style_mem = True
     use_generator_only = False
     use_blurpooling2d = False
+    use_grouped_conv = False
 
     if mode == 'train':
         train(model_path)
