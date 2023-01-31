@@ -3,6 +3,7 @@
 # Contact: seonghobaek@gmail.com
 # ==============================================================================
 
+
 import math
 import numpy as np
 import tensorflow as tf
@@ -1067,3 +1068,47 @@ def generate_fractal_noise_2d(shape, res, octaves=1, persistence=0.5, lacunarity
         frequency *= lacunarity
         amplitude *= persistence
     return noise
+
+
+def cate2pol(img, width, height):
+    margin = 0.92  # Cut off black-background
+    polar_img = cv2.warpPolar(img, (width, height), (img.shape[0] / 2, img.shape[1] / 2), img.shape[1] * margin * 0.5,
+                              cv2.WARP_POLAR_LINEAR)
+    polar_img = cv2.rotate(polar_img, cv2.ROTATE_90_COUNTERCLOCKWISE)
+    return polar_img
+
+
+def pol2cate(img, width, height):
+    img = cv2.rotate(img, cv2.ROTATE_90_CLOCKWISE)
+    margin = 0.92  # Cut off black-background
+    polar_img = cv2.warpPolar(img, (width, height), (img.shape[0] / 2, img.shape[1] / 2), img.shape[1] * margin * 0.5,
+                              cv2.WARP_INVERSE_MAP)
+
+    return polar_img
+
+
+def otsu_binarization(img, width, height):
+    max_sigma = 0
+    max_t = 0
+    H = height
+    W = width
+
+    for _t in range(1, 256, 2):
+        v0 = img[np.where(img < _t)]
+        m0 = np.mean(v0) if len(v0) > 0 else 0.
+        w0 = len(v0) / (H * W)
+        v1 = img[np.where(img >= _t)]
+        m1 = np.mean(v1) if len(v1) > 0 else 0.
+        w1 = len(v1) / (H * W)
+        sigma = w0 * w1 * ((m0 - m1) ** 2)
+        if sigma > max_sigma:
+            max_sigma = sigma
+            max_t = _t
+
+    # Binarization
+    print("threshold >>", max_t)
+    th = max_t + max_sigma
+    img[img < th] = 0
+    img[img >= th] = 255
+
+    return img
