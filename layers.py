@@ -3,6 +3,7 @@
 # Contact: seonghobaek@gmail.com
 # ==============================================================================
 
+
 import tensorflow as tf
 import numpy as np
 
@@ -732,14 +733,13 @@ def se_block(input, scope='squeeze_excitation'):
         return l
 
 
-def add_se_adain_residual_block(in_layer, style_alpha, style_beta, filter_dims, act_func=tf.nn.relu, num_groups=1,
+def add_se_adain_residual_block(in_layer, style_alpha, style_beta, filter_dims, act_func=tf.nn.relu, use_bottleneck=False,
                                 scope='se_adain_residual_block', padding='SAME', pad=0):
     with tf.variable_scope(scope, reuse=tf.AUTO_REUSE):
         l = in_layer
         num_channel_out = filter_dims[-1]
 
         use_depthwise_conv = False
-        use_bottleneck = True
 
         # ResNext: Not good for image reconstruction
         if use_depthwise_conv is True:
@@ -777,7 +777,7 @@ def add_se_adain_residual_block(in_layer, style_alpha, style_beta, filter_dims, 
 
 
 def add_se_residual_block(in_layer, filter_dims, act_func=tf.nn.relu, norm='layer', b_train=False,
-                          scope='residual_block',
+                          scope='residual_block', use_bottleneck=False,
                           padding='SAME', pad=0, num_groups=1):
     with tf.variable_scope(scope, reuse=tf.AUTO_REUSE):
         l = in_layer
@@ -796,8 +796,6 @@ def add_se_residual_block(in_layer, filter_dims, act_func=tf.nn.relu, norm='laye
         else:
             bn_depth = num_channel_out
             # Bottle Neck Layer
-            use_bottleneck = True
-
             if use_bottleneck is True:
                 # Bottle Neck Layer
                 bn_depth = num_channel_out // 4
@@ -1022,4 +1020,3 @@ def up_sample(x, scale_factor=2):
     _, h, w, _ = x.get_shape().as_list()
     new_size = [h * scale_factor, w * scale_factor]
     return tf.image.resize_nearest_neighbor(x, size=new_size)
-
