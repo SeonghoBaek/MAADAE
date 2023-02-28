@@ -3,7 +3,6 @@
 # Contact: seonghobaek@gmail.com
 # ==============================================================================
 
-
 import tensorflow as tf
 import numpy as np
 
@@ -864,12 +863,17 @@ def conv_normalize(input, norm='layer', b_train=True, scope='conv_norm'):
     with tf.variable_scope(scope, reuse=tf.AUTO_REUSE):
         l = input
 
+        if norm is None:
+            return l
+
         if norm == 'layer':
             l = layer_norm(l, scope=scope)
         elif norm == 'batch':
             l = batch_norm_conv(l, b_train=b_train, scope=scope)
         elif norm == 'instance':
             l = instance_norm(l, scope=scope)
+        elif norm == 'group':
+            l = tf.contrib.layers.group_norm(l, scope=scope)
 
     return l
 
