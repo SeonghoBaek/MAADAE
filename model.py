@@ -2,6 +2,7 @@
 # Author: Seongho Baek
 # e-mail: seonghobaek@gmail.com
 
+
 import math
 import tensorflow as tf
 import numpy as np
@@ -24,13 +25,11 @@ G_UNet_Decoder_scope = 'unet_generator_decoder'
 D_scope = 'discriminator'
 
 
-def load_images(file_name_list, base_dir=None, mask=None, mask_noise=None, cutout=False, add_eps=False,
-                rotate=False, gray_scale=False, shift=False):
+def load_images(file_name_list, base_dir=None, mask=None, mask_noise=None, cutout=False, cutout_mask=None,
+                add_eps=False, rotate=False, gray_scale=False, shift=False):
     try:
         images = []
         gt_images = []
-        mask_images = []
-        m_img = None
 
         for file_name in file_name_list:
             fullname = file_name
@@ -43,7 +42,6 @@ def load_images(file_name_list, base_dir=None, mask=None, mask_noise=None, cutou
                 return None
 
             h, w, c = img.shape
-            #img = img[90:h - 90, 90:w - 90]
             img = cv2.resize(img, dsize=(input_width, input_height), interpolation=cv2.INTER_AREA)
 
             if gray_scale is True:
@@ -53,7 +51,7 @@ def load_images(file_name_list, base_dir=None, mask=None, mask_noise=None, cutou
                 img = np.array(img) * 1.0
 
                 if rotate is True:
-                    rot = np.random.randint(-45, 45)
+                    rot = np.random.randint(-5, 5)
                     img = util.rotate_image(img, rot)
 
                 if shift is True:
@@ -64,7 +62,6 @@ def load_images(file_name_list, base_dir=None, mask=None, mask_noise=None, cutou
 
                 gt_img = img.copy()
                 gt_img = np.array(gt_img)
-                M = np.zeros_like(gt_img)
 
                 if add_eps is True:
                     img = img + np.random.normal(size=img.shape)
@@ -73,78 +70,85 @@ def load_images(file_name_list, base_dir=None, mask=None, mask_noise=None, cutou
                     img = np.expand_dims(img, axis=-1)
                     gt_img = np.expand_dims(gt_img, axis=-1)
 
-                if cutout is True and np.random.randint(low=0, high=10) < 7:
-                    if mask_noise is not None:
-                        if use_bg_mask_samples is True:
-                            bg_sample_file = np.random.choice(bg_mask_sample_files, size=1)
-                            m_img = cv2.imread(bg_sample_file[0])
-                            #m_img = m_img[90:h - 90, 90:w - 90]
-                            m_img = cv2.resize(m_img, dsize=(input_width, input_height), interpolation=cv2.INTER_AREA)
-
-                            if gray_scale is True:
-                                m_img = cv2.cvtColor(m_img, cv2.COLOR_BGR2GRAY)
-                            m_img = util.rotate_image(m_img, np.random.randint(-45, 45))
-                        else:
-                            m_img = np.zeros_like(img)
-                            sample_pixel_x = np.random.randint(low=input_width//4, high=3 * (input_width//4))
-                            sample_pixel_y = np.random.randint(low=input_width//4, high=3 * (input_width//4))
-                            sample_pixel_intensity = np.random.randint(low=-255, high=255)
-                            sample_pixel = img[sample_pixel_x, sample_pixel_y] + sample_pixel_intensity
-                            sample_pixel = np.where(sample_pixel > 255, 255, sample_pixel)
-                            sample_pixel = np.where(sample_pixel < 0, 0, sample_pixel)
-                            m_img += sample_pixel
-
-                        if np.random.randint(low=0, high=10) > 4:
-                            r_mask_noise = 1 - mask_noise
-                            bg_img = img * r_mask_noise
-                            alpha = np.random.uniform(low=0.8, high=1.0)
-                            noise_img = alpha * (m_img * mask_noise) + (1 - alpha) * (img * mask_noise)
-                            m_img = noise_img + bg_img
-                        else:
-                            mask_noise.fill(1.0)
-                    else:
+                '''
+                if mask_noise is not None:     
+                    if np.random.randint(low=0, high=10) > 5:
                         m_img = np.zeros_like(img)
+                        sample_pixel_x = np.random.randint(low=input_width // 4, high=3 * (input_width // 4))
+                        sample_pixel_y = np.random.randint(low=input_width // 4, high=3 * (input_width // 4))
+                        sample_pixel_intensity = np.random.randint(low=-255, high=255)
+                        sample_pixel = img[sample_pixel_x, sample_pixel_y] + sample_pixel_intensity
+                        sample_pixel = np.where(sample_pixel > 255, 255, sample_pixel)
+                        sample_pixel = np.where(sample_pixel < 0, 0, sample_pixel)
+                        m_img += sample_pixel
+                        r_mask_noise = 1 - mask_noise
+                        bg_img = img * r_mask_noise
+                        alpha = np.random.uniform(low=0.8, high=1.0)
+                        noise_img = alpha * (m_img * mask_noise) + (1 - alpha) * (img * mask_noise)
+                        img = noise_img + bg_img
+                    else:
+                        r_mask_noise = 1 - mask_noise
+                        bg_img = img * r_mask_noise
+                        img = bg_img
+                 '''
+
+                if cutout is True:
                     # square cut out
-                    co_w = np.random.randint(low=input_width // 20, high=(3 * input_width) // 4)
-                    co_h = np.random.randint(low=input_height // 20, high=(3 * input_height) // 4)
+                    co_w = np.random.randint(low=2, high=input_width // 4)
+                    co_h = np.random.randint(low=2, high=input_height // 4)
                     num_cutout = np.random.randint(low=1, high=1 + (input_width // co_w))
+                    cut_mask = np.zeros_like(img)
+
+                    if np.random.randint(low=0, high=10) < 7:
+                        if co_w <= co_h:
+                            co_w = np.random.randint(low=1, high=5)
+                        else:
+                            co_h = np.random.randint(low=1, high=5)
+                        mask_noise = None
 
                     for _ in range(num_cutout):
                         r_x = np.random.randint(low=0, high=input_width - co_w)
                         r_y = np.random.randint(low=0, high=input_height - co_h)
+                        #img[r_x:r_x + co_w, r_y:r_y + co_h] = 0.0
+                        cut_mask[r_x:r_x + co_w, r_y:r_y + co_h] = 1.0
 
-                        img[r_x:r_x + co_w, r_y:r_y + co_h] = m_img[r_x:r_x + co_w, r_y:r_y + co_h]
-                        M[r_x:r_x + co_w, r_y:r_y + co_h] = mask_noise[r_x:r_x + co_w, r_y:r_y + co_h]
-                        '''
-                        if mask_noise is not None:
-                            if m_img is not None:
-                                if b_cutmix is True:
-                                    img[r_x:r_x + co_w, r_y:r_y + co_h, :] = m_img[r_x:r_x + co_w, r_y:r_y + co_h, :]
-                                else:
-                                    img[r_x:r_x + co_w, r_y:r_y + co_h, :] *= mask_noise[r_x:r_x + co_w, r_y:r_y + co_h, :]
-                            else:
-                                img[r_x:r_x + co_w, r_y:r_y + co_h, :] *= mask_noise[r_x:r_x + co_w, r_y:r_y + co_h, :]
-                        else:
-                            img[r_x:r_x + co_w, r_y:r_y + co_h, :] = np.random.randint(low=0, high=255)
-                        '''
+                    if mask_noise is not None:
+                        cut_mask = mask_noise * cut_mask
+
+                    rot = np.random.randint(-90, 90)
+                    cut_mask = util.rotate_image(cut_mask, rot)
+                    if cutout_mask is not None:
+                        cut_mask = cut_mask * cutout_mask
+
+                    case = np.random.randint(1, 10)
+                    if case < 4:
+                        img = img + (np.random.randint(-255, 255) * cut_mask)
+                        img = np.where(img > 255, 255, img)
+                        img = np.where(img < 0, 0, img)
+                    elif case < 7:
+                        bg_img = img * (1.0 - cut_mask)
+                        fg_img = img * cut_mask
+                        alpha = np.random.uniform(low=0.2, high=0.8)
+                        cut_mask = np.random.randint(1, 255) * cut_mask
+                        img = bg_img + (alpha * fg_img + (1 - alpha) * cut_mask)
+                    else:
+                        cut_mask = 1.0 - cut_mask
+                        img = img * cut_mask
+
                 if mask is not None:
                     img = img * mask
                     gt_img = gt_img * mask
-                    M = M * mask
-                    M = M[:, :, 0]
-                    M = np.expand_dims(M, axis=-1)
 
                 n_img = (img * 1.0) / 255.0
                 n_gt_img = (gt_img * 1.0) / 255.0
 
                 images.append(n_img)
                 gt_images.append(n_gt_img)
-                mask_images.append(M)
     except cv2.error as e:
         print(e)
         return None
 
-    return np.array(images), np.array(gt_images), np.array(mask_images)
+    return np.array(images), np.array(gt_images)
 
 
 def get_gradient_loss(img1, img2):
@@ -197,8 +201,8 @@ def get_residual_loss(value, target, type='l1', alpha=1.0):
                (1 - alpha) * f_loss
     elif type == 'mix_l1':
         m = tf.reduce_mean(tf.abs(tf.subtract(value, target)))
-        loss = alpha * tf.reduce_mean(1 - tf.image.ssim_multiscale(value, target, max_val=1.0)) + \
-               (1 - alpha) * m #+ get_gradient_loss(value, target)
+        loss = tf.reduce_mean(1 - tf.image.ssim_multiscale(value, target, max_val=1.0)) + \
+               m #+ get_gradient_loss(value, target)
     else:
         loss = 0.0
 
@@ -228,7 +232,7 @@ def get_discriminator_loss(real, fake, type='wgan', gamma=1.0):
         return tf.reduce_mean((real - fake) ** 2)
 
 
-def encoder(in_tensor, activation=tf.nn.relu, norm='layer', scope='encoder', b_train=False):
+def encoder(in_tensor, activation=tf.nn.relu, norm='instance', scope='encoder', b_train=False):
     with tf.variable_scope(scope, reuse=tf.AUTO_REUSE):
         print(scope + ' encoder input: ' + str(in_tensor.get_shape().as_list()))
         num_bottleneck = bottleneck_num
@@ -243,7 +247,7 @@ def encoder(in_tensor, activation=tf.nn.relu, norm='layer', scope='encoder', b_t
             block_depth = block_depth * 2
             l = layers.conv(l, scope='downsapmple_' + str(i), filter_dims=[3, 3, block_depth], stride_dims=[2, 2],
                             non_linear_fn=None)
-            #l = layers.conv_normalize(l, norm=norm, b_train=b_train, scope='encoder_norm_' + str(i))
+            l = layers.conv_normalize(l, norm=norm, b_train=b_train, scope='encoder_norm_' + str(i))
             l = activation(l)
 
             print(scope + ' Downsample: ' + str(l.get_shape().as_list()))
@@ -257,7 +261,8 @@ def encoder(in_tensor, activation=tf.nn.relu, norm='layer', scope='encoder', b_t
         if num_bottleneck > 0:
             l = activation(l)
 
-        l = layers.conv(l, scope='latent', filter_dims=[3, 3, query_dimension], stride_dims=[1, 1], non_linear_fn=None)
+        l = layers.conv(l, scope='latent', filter_dims=[3, 3, query_dimension], stride_dims=[1, 1],
+                        non_linear_fn=None)
 
         query = l
 
@@ -297,12 +302,15 @@ def decoder(content, style=None, activation=tf.nn.relu, norm='instance', scope='
 
         for i in range(upsample_num + 1):
             block_depth = block_depth // 2
-            l = layers.conv(l, scope='espcn_1' + str(i), filter_dims=[3, 3, block_depth * 2 * 2], stride_dims=[1, 1],
-                            non_linear_fn=None)
-            l = tf.nn.depth_to_space(l, 2)
-            l = layers.conv_normalize(l, norm=norm, b_train=b_train, scope='espcn_norm2_' + str(i))
+            #l = layers.conv(l, scope='espcn_1' + str(i), filter_dims=[3, 3, block_depth * 2 * 2], stride_dims=[1, 1],
+            #                non_linear_fn=None)
+            #l = tf.nn.depth_to_space(l, 2)
+            _, h, w, _ = l.get_shape().as_list()
+            l = tf.image.resize_images(l, size=[2 * h, 2 * w])
+            l = layers.conv(l, scope='upsample_conv_' + str(i), filter_dims=[3, 3, block_depth],
+                            stride_dims=[1, 1], non_linear_fn=None)
+            l = layers.conv_normalize(l, norm=norm, b_train=b_train, scope='upsample_norm_' + str(i))
             l = activation(l)
-
             print(scope + ' Upsampling: ' + str(l.get_shape().as_list()))
 
         l = activation(l)
@@ -341,63 +349,160 @@ def style_encoder(in_tensor, activation=util.swish, norm='layer', scope='style_e
     return style
 
 
-def unet_encoder(in_tensor, activation=tf.nn.relu, norm='layer', scope='unet_encoder', b_train=False):
+def unet_encoder(in_tensor, activation=tf.nn.relu, norm='instance', scope='unet_encoder', b_train=False):
     with tf.variable_scope(scope, reuse=tf.AUTO_REUSE):
         print(scope + ' encoder input: ' + str(in_tensor.get_shape().as_list()))
         block_depth = unet_unit_block_depth
 
-        init_tensor = layers.conv(in_tensor, scope='init1', filter_dims=[5, 5, block_depth], stride_dims=[1, 1],
+        init_tensor = layers.conv(in_tensor, scope='init1', filter_dims=[3, 3, 2*block_depth], stride_dims=[1, 1],
                                   non_linear_fn=activation)
         l = init_tensor
+        print(scope + ' encoder base layer: ' + str(l.get_shape().as_list()))
         lateral_layers = []
 
         for i in range(downsample_num+1):
-            l = layers.conv(l, scope='downsapmple1_' + str(i), filter_dims=[3, 3, block_depth], stride_dims=[1, 1],
+            lateral_layers.append(l)
+            print(scope + ' Add Lateral: ' + str(l.get_shape().as_list()))
+            block_depth = block_depth * 2
+            l = layers.conv(l, scope='downsapmple1_' + str(i), filter_dims=[3, 3, block_depth], stride_dims=[2, 2],
                             non_linear_fn=None)
             l = layers.conv_normalize(l, norm=norm, b_train=b_train, scope='encoder_norm1_' + str(i))
             l = activation(l)
-            print(scope + ' Add Lateral: ' + str(l.get_shape().as_list()))
-            lateral_layers.append(l)
-            block_depth = block_depth * 2
-            l = layers.conv(l, scope='downsapmple2_' + str(i), filter_dims=[3, 3, block_depth], stride_dims=[2, 2],
+            l = layers.conv(l, scope='downsapmple2_' + str(i), filter_dims=[3, 3, block_depth], stride_dims=[1, 1],
                             non_linear_fn=None)
-            l = layers.conv_normalize(l, norm=norm, b_train=b_train, scope='encoder_norm2_' + str(i))
+            #l = layers.conv_normalize(l, norm=norm, b_train=b_train, scope='encoder_norm2_' + str(i))
             l = activation(l)
             print(scope + ' Downsample: ' + str(l.get_shape().as_list()))
 
-        l = layers.conv(l, scope='latent', filter_dims=[3, 3, representation_dimension], stride_dims=[1, 1], non_linear_fn=None)
         latent = l
         print(scope + ' Encoder Out: ' + str(l.get_shape().as_list()))
 
     return latent, lateral_layers
 
 
-def unet_decoder(latent, lateral_layers, activation=tf.nn.relu, norm='layer', scope='unet_decoder', b_train=False):
+def unet3_concat(cur_layer, lateral_layers, start_step=0, unit_block=8, activation=tf.nn.relu, norm='instance',
+                 b_train=False, scope='unet3_concat'):
+    with tf.variable_scope(scope, reuse=tf.AUTO_REUSE):
+        l = cur_layer
+        _, feature_size, _, _ = l.get_shape().as_list()
+        #l0 = layers.conv(lateral_layers[start_step], scope='l0', filter_dims=[3, 3, unit_block], stride_dims=[1, 1],
+        #                 non_linear_fn=activation)
+        #l0 = layers.conv_normalize(l0, norm=norm, b_train=b_train, scope='norm')
+        #l0 = activation(l0)
+        l0 = lateral_layers[start_step]
+        print(scope + ' l0: ' + str(l0.get_shape().as_list()))
+        l = tf.concat([l, l0], axis=-1)
+        print(scope + ' concat: ' + str(l.get_shape().as_list()))
+
+        for i in range(len(lateral_layers)):
+            if i > start_step:
+                l1 = lateral_layers[i]
+                _, l1_size, _, _ = l1.get_shape().as_list()
+                print(scope + ' l1: ' + str(l1.get_shape().as_list()))
+                ratio = l1_size//feature_size
+                l1 = tf.layers.max_pooling2d(l1, pool_size=ratio, strides=ratio, padding='SAME')
+                l1 = layers.conv(l1, scope='l1_' + str(i), filter_dims=[3, 3, unit_block], stride_dims=[1, 1],
+                                 non_linear_fn=None)
+                if norm is not None:
+                    l1 = layers.conv_normalize(l1, norm=norm, b_train=b_train, scope='norm_' + str(i))
+                if activation is not None:
+                    l1 = activation(l1)
+
+                l = tf.concat([l, l1], axis=-1)
+
+        return l
+
+
+def unet3_decoder(latent, lateral_layers, activation=tf.nn.relu, norm='instance', scope='unet3_decoder', b_train=False):
+    with tf.variable_scope(scope, reuse=tf.AUTO_REUSE):
+        print(scope + ' decoder input: ' + str(latent.get_shape().as_list()))
+        block_depth = unet3_unit_block_depth
+        lateral_layers.reverse()
+        low_layers = []
+
+        for i in range(upsample_num+1):
+            ratio = 2**(i+1)
+            print(scope + ' Upsample ratio: ' + str(ratio))
+            _, h, w, _ = latent.get_shape().as_list()
+            l = latent
+            l = layers.conv(l, scope='low_step_resize_' + str(i), filter_dims=[3, 3, block_depth],
+                            stride_dims=[1, 1], non_linear_fn=None)
+            l = layers.conv_normalize(l, norm=norm, b_train=b_train, scope='norm_' + str(i))
+            l = activation(l)
+            l = tf.image.resize_images(l, size=[ratio * h, ratio * w])
+            print(scope + ' Latent Upsampling: ' + str(l.get_shape().as_list()))
+
+            for j in range(len(low_layers)):
+                ratio = 2**(len(low_layers) - j)
+                _, h, w, _ = low_layers[j].get_shape().as_list()
+                l1 = low_layers[j]
+                l1 = layers.conv(l1, scope=str(i) + '_ll_concat_' + str(j), filter_dims=[3, 3, block_depth],
+                                 stride_dims=[1, 1], non_linear_fn=None)
+                l1 = layers.conv_normalize(l1, norm=norm, b_train=b_train, scope='norm_low_' + str(i) + str(j))
+                l1 = activation(l1)
+                l1 = tf.image.resize_images(l1, size=[ratio * h, ratio * w])
+                print(scope + ' low step resize: ' + str(l1.get_shape().as_list()))
+                l = tf.concat([l, l1], axis=-1)
+
+            l = unet3_concat(l, lateral_layers, start_step=i, unit_block=block_depth, norm=None,
+                             activation=activation, b_train=b_train, scope='unet3_concat_' + str(i))
+            _, _, _, concat_c = l.get_shape().as_list()
+
+            l = layers.conv(l, scope='decoder_layer_' + str(i), filter_dims=[3, 3, concat_c],
+                            stride_dims=[1, 1], non_linear_fn=None)
+            l = layers.conv_normalize(l, norm=norm, b_train=b_train, scope='decoder_layer_norm_' + str(i))
+            l = activation(l)
+            print(scope + ' Layer: ' + str(l.get_shape().as_list()))
+
+            low_layers.append(l)
+
+        #l = layers.conv(low_layers[-1], scope='summation', filter_dims=[3, 3, block_depth], stride_dims=[1, 1],
+        #                non_linear_fn=activation)
+        img = layers.conv(low_layers[-1], scope='last', filter_dims=[3, 3, num_channel], stride_dims=[1, 1], non_linear_fn=None)
+        print(scope + ' Output: ' + str(img.get_shape().as_list()))
+
+    return img
+
+
+def unet_decoder(latent, lateral_layers, activation=tf.nn.relu, norm='instance', scope='unet_decoder', b_train=False):
     with tf.variable_scope(scope, reuse=tf.AUTO_REUSE):
         print(scope + ' decoder input: ' + str(latent.get_shape().as_list()))
         block_depth = unet_unit_block_depth * (2**(1 + upsample_num))
 
         l = latent
-        l = layers.self_attention(l, scope='self_attention')
+        lateral_layers.reverse()
 
         for i in range(upsample_num+1):
             block_depth = block_depth // 2
-            l = layers.conv(l, scope='espcn_1_' + str(i), filter_dims=[3, 3, block_depth * 2 * 2], stride_dims=[1, 1],
-                            non_linear_fn=None)
-            l = tf.nn.depth_to_space(l, 2)
-            l = layers.conv_normalize(l, norm=norm, b_train=b_train, scope='espcn_norm1_' + str(i))
+
+            # ESPCN
+            #l = layers.conv(l, scope='espcn_1_' + str(i), filter_dims=[3, 3, block_depth * 2 * 2], stride_dims=[1, 1],
+            #                non_linear_fn=None)
+            #l = tf.nn.depth_to_space(l, 2)
+            #l = layers.conv_normalize(l, norm=norm, b_train=b_train, scope='upsample_norm_' + str(i))
+            #l = activation(l)
+
+            # Resize & Conv
+            _, h, w, _ = l.get_shape().as_list()
+            l = tf.image.resize_images(l, size=[2 * h, 2 * w])
+            l = layers.conv(l, scope='upsample_conv_' + str(i), filter_dims=[3, 3, block_depth],
+                            stride_dims=[1, 1], non_linear_fn=None)
+            l = layers.conv_normalize(l, norm=norm, b_train=b_train, scope='upsample_norm_' + str(i))
             l = activation(l)
             print(scope + ' Upsampling: ' + str(l.get_shape().as_list()))
-            l = tf.concat([l, lateral_layers[upsample_num - i]], axis=-1)
-            l = layers.conv(l, scope='espcn_2_' + str(i), filter_dims=[3, 3, block_depth], stride_dims=[1, 1],
-                            non_linear_fn=None)
-            l = layers.conv_normalize(l, norm=norm, b_train=b_train, scope='espcn_norm2_' + str(i))
+
+            # l = tf.concat([l, lateral_layers[upsample_num - i]], axis=-1)
+            l_br = unet3_concat(l, lateral_layers, start_step=i, unit_block=unet3_unit_block_depth, norm=None,
+                                activation=activation, b_train=b_train, scope='unet3_concat_' + str(i))
+
+            l_br = layers.conv(l_br, scope='espcn_2_' + str(i), filter_dims=[3, 3, block_depth], stride_dims=[1, 1],
+                               non_linear_fn=None)
+            l_br = layers.conv_normalize(l_br, norm=norm, b_train=b_train, scope='espcn_norm2_' + str(i))
+            l = tf.add(l, l_br)
             l = activation(l)
 
-        l = layers.add_se_residual_block(l, filter_dims=[3, 3, block_depth],norm=norm,
-                                         act_func=activation, scope=scope + '_bt_block')
-        l = activation(l)
-        img = layers.conv(l, scope='last', filter_dims=[5, 5, num_channel], stride_dims=[1, 1], non_linear_fn=None)
+        #l = layers.conv(l, scope='summation', filter_dims=[3, 3, block_depth], stride_dims=[1, 1], non_linear_fn=activation)
+        img = layers.conv(l, scope='last', filter_dims=[3, 3, num_channel], stride_dims=[1, 1], non_linear_fn=None)
         print(scope + ' Output: ' + str(img.get_shape().as_list()))
 
     return img
@@ -423,7 +528,7 @@ def spatial_memory(query, size, dims, scope='spatial_aug_mem'):
         print(scope + ' softmax: ' + str(sm.get_shape().as_list()))
         threashold = tf.constant(1 / aug_mem_size, dtype=tf.float32)
         attention = tf.multiply(tf.nn.relu(sm - threashold), sm)
-        attention = attention / (1e-4 + tf.abs(sm - threashold))
+        attention = attention / (1e-7 + tf.abs(sm - threashold))
         print(scope + ' attention: ' + str(attention.get_shape().as_list()))
         l1 = tf.expand_dims(tf.reduce_sum(attention, axis=-1), axis=-1)
         # print(scope + ' l1: ' + str(l1.get_shape().as_list()))
@@ -492,7 +597,8 @@ def discriminator(x1, x2, activation='swish', scope='discriminator_network', nor
         block_depth = disc_unit_block_depth
 
         if x2 is not None:
-            x = tf.concat([x1, x2], axis=-1)
+            #x = tf.concat([x1, x2], axis=-1)
+            x = tf.abs(x1-x2)
         else:
             x = x1
         print(scope + ' Input: ' + str(x.get_shape().as_list()))
@@ -547,10 +653,8 @@ def train(model_path='None'):
     if use_roi_mask is True:
         print('Create RoI Mask Image.')
         roi_mask_img = create_roi_mask(input_width, input_height)
-        num_effective_pixels = np.sum(roi_mask_img)
     else:
         roi_mask_img = None
-        num_effective_pixels = input_width * input_height
 
     if use_outlier_samples is True:
         outlier_files = []
@@ -563,19 +667,19 @@ def train(model_path='None'):
             outlier_files.append(a_file_path)
         outlier_files = shuffle(outlier_files)
 
-    if use_bg_mask_samples is True:
-        bg_mask_file_dir = os.listdir(bg_mask_data)
-        for bg_mask_file in bg_mask_file_dir:
-            file_path = os.path.join(bg_mask_data, bg_mask_file).replace("\\", "/")
-            bg_mask_sample_files.append(file_path)
+    noise_files = []
+    if use_noise_samples is True:
+        noise_files = []
+        noise_file_list = os.listdir(noise_data)
+        for a_file in noise_file_list:
+            a_file_path = os.path.join(noise_data, a_file).replace("\\", "/")
+            noise_files.append(a_file_path)
 
-    learning_rate = 2e-4
-    min_learning_rate = 1e-5
+    learning_rate = 1e-3
     sparsity = 2e-5
 
     X_IN = tf.placeholder(tf.float32, [None, input_height, input_width, num_channel])
     Y_IN = tf.placeholder(tf.float32, [None, input_height, input_width, num_channel])
-    M_IN = tf.placeholder(tf.float32, [None, input_height, input_width, 1])
     B_TRAIN = tf.placeholder(tf.bool)
     LR = tf.placeholder(tf.float32, None)
 
@@ -590,20 +694,20 @@ def train(model_path='None'):
     G_X = decoder(latent_g, style, norm='layer', scope=G_Decoder_scope, b_train=B_TRAIN)
 
     unet_input = tf.concat([G_X, X_IN], axis=-1)
+    #unet_input = tf.concat([tf.abs(G_X - X_IN), G_X, X_IN], axis=-1)
     z_gen, laterals = unet_encoder(unet_input, norm='layer', scope=G_UNet_Encoder_scope, b_train=B_TRAIN)
-    U_G_X = unet_decoder(z_gen, laterals, norm='layer', scope=G_UNet_Decoder_scope, b_train=B_TRAIN)
 
-    BG_U_G_X = U_G_X * (1 - M_IN)
-    BG_Y_IN = Y_IN * (1 - M_IN)
-    FG_U_G_X = U_G_X * M_IN
-    FG_G_X = G_X * M_IN
+    if use_unet3 is True:
+        U_G_X = unet3_decoder(z_gen, laterals, norm='layer', scope=G_UNet_Decoder_scope, b_train=B_TRAIN)
+    else:
+        U_G_X = unet_decoder(z_gen, laterals, norm='layer', scope=G_UNet_Decoder_scope, b_train=B_TRAIN)
 
     # Full Image + Background Image + Foreground Anomaly
-    unet_residual_loss = get_residual_loss(U_G_X, Y_IN, type='mix_l1', alpha=0.6)
+    unet_residual_loss = get_residual_loss(U_G_X, Y_IN, type='mix_l1', alpha=0.8)
     unet_negative_residual_loss = get_residual_loss(U_G_X, X_IN, type='l1')
 
-    pseudo_residual_loss = get_residual_loss(G_X, Y_IN, type='mix_l1', alpha=0.6)
-    negative_pseudo_residual_loss = get_residual_loss(G_X, X_IN, type='mix_l1', alpha=0.6)
+    pseudo_residual_loss = get_residual_loss(G_X, Y_IN, type='mix_l1', alpha=0.8)
+    negative_pseudo_residual_loss = get_residual_loss(G_X, X_IN, type='l1')
 
     if use_categorical_constraints is True:
         cat_samples = categorical_sample(attention_g)
@@ -641,7 +745,7 @@ def train(model_path='None'):
     pseudo_generator_vars = memory_vars + ae_vars + style_encoder_vars
     total_joint_variable = unet_generator_vars + pseudo_generator_vars
     # Optimizer
-    unet_loss = unet_residual_loss #- 0.1 * unet_negative_residual_loss
+    unet_loss = unet_residual_loss
     mnet_loss = pseudo_residual_loss
 
     unet_generator_optimizer = tf.train.AdamOptimizer(learning_rate=LR).minimize(unet_loss,
@@ -650,41 +754,51 @@ def train(model_path='None'):
                                                                                    var_list=pseudo_generator_vars)
     joint_optimizer = tf.train.AdamOptimizer(learning_rate=LR).minimize(unet_loss + mnet_loss,
                                                                         var_list=total_joint_variable)
-    disc_optimizer = tf.train.AdamOptimizer(learning_rate=learning_rate).minimize(d_real_loss, var_list=disc_vars)
+    disc_optimizer = tf.train.AdamOptimizer(learning_rate=LR).minimize(d_real_loss, var_list=disc_vars)
 
     config = tf.ConfigProto(allow_soft_placement=True)
     config.gpu_options.allow_growth = True
+    num_pretrain = encoder_pretrain
 
     with tf.Session(config=config) as sess:
         sess.run(tf.global_variables_initializer())
 
         try:
-            saver = tf.train.Saver()
-            saver.restore(sess, model_path)
+            pseudo_generator_saver = tf.train.Saver(pseudo_generator_vars)
+            unet_generator_saver = tf.train.Saver(unet_generator_vars)
+            print('Load pseudo-generator...')
+            pseudo_generator_saver.restore(sess, model_path)
+            num_pretrain = 0
+            print('Load unet-generator...')
+            unet_generator_saver.restore(sess, model_path)
             print('Model Restored')
         except:
-            print('Start New Training. Wait ...')
+            if num_pretrain == 0:
+                print('Start Training UNet Generator Only. Wait ...')
+            else:
+                print('Start New Training. Wait ...')
 
         te_dir = test_data
         tr_dir = train_data
+        cutout_mask = create_roi_mask(input_width, input_height, offset=45)
+
+        tr_files = []
+        # Classes
+        classes = os.listdir(tr_dir)
+
+        print(' Num classes: ' + str(len(classes)))
+        for cls in classes:
+            class_path = os.path.join(tr_dir, cls).replace("\\", "/")
+            samples = os.listdir(class_path)
+            samples = np.random.choice(samples, size=num_samples_per_class)  # (1000//len(classes)))
+            for s in samples:
+                sample_path = os.path.join(class_path, s).replace("\\", "/")
+                tr_files.append(sample_path)
+        print(' Num samples per epoch: ' + str(len(tr_files)))
+        total_input_size = len(tr_files)
 
         for e in range(num_epoch):
-            tr_files = []
-            # Classes
-            classes = os.listdir(tr_dir)
-
-            print(' Num classes: ' + str(len(classes)))
-            for cls in classes:
-                class_path = os.path.join(tr_dir, cls).replace("\\", "/")
-                samples = os.listdir(class_path)
-                samples = np.random.choice(samples, size=num_samples_per_class)  # (1000//len(classes)))
-                for s in samples:
-                    sample_path = os.path.join(class_path, s).replace("\\", "/")
-                    tr_files.append(sample_path)
-            print(' Num samples per epoch: ' + str(len(tr_files)))
-
             tr_files = shuffle(tr_files)
-            total_input_size = len(tr_files)
             training_batch = zip(range(0, total_input_size, batch_size),
                                  range(batch_size, total_input_size + 1, batch_size))
             itr = 0
@@ -702,92 +816,94 @@ def train(model_path='None'):
             aug_noise = np.where(noise > np.average(noise), 1.0, 0.0)
             aug_noise = np.expand_dims(aug_noise, axis=-1)
 
+            # Learning rate schedule
+            if e <= num_pretrain:
+                lr = learning_rate
+            elif e <= num_pretrain + 10:
+                learning_rate = 0.9 * learning_rate
+                lr = learning_rate
+            else:
+                lr = 0.5 * learning_rate * (1.0 + np.cos(np.pi * ((e - encoder_pretrain) / num_epoch)))
+
             for start, end in training_batch:
                 itr = itr + 1
 
                 if use_outlier_samples is True:
-                    sample_outlier_files = np.random.choice(outlier_files, size=8)
-                    sample_outlier_imgs, _, _ = load_images(sample_outlier_files, base_dir=None, mask=roi_mask_img,
-                                                         mask_noise=None, cutout=False, rotate=True, shift=False, add_eps=False)
+                    sample_outlier_files = np.random.choice(outlier_files, size=2)
+                    sample_outlier_imgs, _ = load_images(sample_outlier_files, rotate=True)
                     sample_outlier_imgs = np.sum(sample_outlier_imgs, axis=0)
 
                     #if np.random.randint(low=0, high=10) < 5:
                     #    sample_outlier_imgs = aug_noise + sample_outlier_imgs
                     sample_outlier_imgs = np.where(sample_outlier_imgs > 1, 1, sample_outlier_imgs)
-                    batch_imgs, gt_imgs, mask_imgs = load_images(tr_files[start:end], base_dir=None, mask=roi_mask_img,
-                                                      mask_noise=sample_outlier_imgs, cutout=True, rotate=True,
-                                                      shift=True, add_eps=False)
+                    batch_imgs, gt_imgs = load_images(tr_files[start:end], mask=roi_mask_img, mask_noise=sample_outlier_imgs,
+                                                      rotate=True, shift=True, cutout=True, cutout_mask=cutout_mask)
                 else:
-                    mask_noise = None
-                    #if np.random.randint(low=0, high=10) < 5:
-                    #    mask_noise = aug_noise
-                    batch_imgs, gt_imgs, _ = load_images(tr_files[start:end], base_dir=None, mask=roi_mask_img,
-                                                      mask_noise=mask_noise, cutout=True, rotate=True, shift=True, add_eps=False)
+                    batch_imgs, gt_imgs = load_images(tr_files[start:end], rotate=True, shift=True, mask_noise=aug_noise,
+                                                      mask=roi_mask_img, cutout=True, cutout_mask=cutout_mask)
 
-                lr = np.max([min_learning_rate, learning_rate * np.cos((np.pi * 7.0 / 16.0) * (e / num_epoch))])
+                if use_noise_samples is True:
+                    noise_samples = np.random.choice(noise_files, size=batch_size)
+                    noise_sample_imgs, _ = load_images(noise_samples, rotate=True)
+                    blending_a = 0.0
+                    if np.random.randint(low=0, high=10) < 5:
+                        blending_a = np.random.uniform(low=0.1, high=0.4)
+                    batch_imgs = (1 - blending_a) * batch_imgs + blending_a * noise_sample_imgs
 
-                _, pseudo_g_loss = sess.run([pseudo_generator_optimizer, mnet_loss],
-                                            feed_dict={X_IN: batch_imgs, Y_IN: gt_imgs, LR: lr, B_TRAIN: True})
-                _, unet_g_loss, u_g_x_imgs = sess.run([unet_generator_optimizer, unet_loss, U_G_X],
-                                                                      feed_dict={X_IN: batch_imgs, Y_IN: gt_imgs, M_IN: mask_imgs,
-                                                                                 LR: lr, B_TRAIN: True})
+                _, g_x_imgs, pseudo_g_loss = sess.run([pseudo_generator_optimizer, G_X, mnet_loss],
+                                                      feed_dict={X_IN: batch_imgs, Y_IN: gt_imgs, LR: lr, B_TRAIN: True})
 
-                #_, unet_g_loss, pseudo_g_loss, u_g_x_imgs, g_x_imgs = sess.run([joint_optimizer, unet_loss, mnet_loss, U_G_X, G_X],
-                #                                                     feed_dict={X_IN: batch_imgs, Y_IN: gt_imgs, LR: lr,
-                #                                                                B_TRAIN: True})
-                _ = sess.run([disc_optimizer],
-                             feed_dict={X_IN: batch_imgs, Y_IN: gt_imgs, LR: lr, B_TRAIN: True})
+                if e >= num_pretrain:
+                    _, _, unet_g_loss, u_g_x_imgs = sess.run([unet_generator_optimizer, disc_optimizer, unet_loss, U_G_X],
+                                                          feed_dict={X_IN: batch_imgs, Y_IN: gt_imgs,
+                                                          LR: lr, B_TRAIN: True})
 
-                delta_img = np.abs(u_g_x_imgs[0] - gt_imgs[0]) * roi_mask_img
-                s = calculate_anomaly_score(255 * delta_img, input_width, input_height, filter_size=32)
-                print('epoch: ' + str(e) + ', unet_g_loss: ' + str(unet_g_loss) + ', pseudo_g_loss: ' + str(pseudo_g_loss) +
-                      ', anomaly score: ' + str(s))
+                    #_, unet_g_loss, pseudo_g_loss, u_g_x_imgs, g_x_imgs, _ = sess.run([joint_optimizer, unet_loss, mnet_loss, U_G_X, G_X, disc_optimizer],
+                    #                                                                  feed_dict={X_IN: batch_imgs, Y_IN: gt_imgs, LR: lr, B_TRAIN: True})
 
-                if itr % 10 == 0:
-                    cv2.imwrite(out_dir + '/' + str(itr) + '.jpg', 255 * u_g_x_imgs[0])
-                    #cv2.imwrite(out_dir + '/' + str(e) + '_mask_' + str(itr) + '.jpg', 255 * m_segment_imgs[0])
-                    #cv2.imwrite(out_dir + '/' + str(e) + '_mask_Y_' + str(itr) + '.jpg', 255 * mask_imgs[0])
-                    #cv2.imwrite(out_dir + '/' + str(e) + '_g_' + str(itr) + '.jpg', g_img)
+                    #_ = sess.run([disc_optimizer],
+                    #             feed_dict={X_IN: batch_imgs, Y_IN: gt_imgs, LR: lr, B_TRAIN: True})
 
-                    print('Elapsed Time at  ' + str(e) + '/' + str(num_epoch) + ' epochs, ' + str(
-                        time.time() - train_start_time) + ' sec')
-                    try:
-                        print('Saving model...')
-                        saver.save(sess, model_path)
-                        print('Saved.')
-                    except:
-                        print('Save failed')
-                    print('Training Time: ' + str(time.time() - train_start_time))
+                    print('epoch: ' + str(e) + ', unet_g_loss: ' + str(unet_g_loss) + ', pseudo_g_loss: ' + str(pseudo_g_loss))
 
-            if (e+1) % 3 == 0:
+                    if itr % 10 == 0:
+                        cv2.imwrite(out_dir + '/' + str(itr) + '.jpg', 255 * u_g_x_imgs[0])
+
+                        print('Elapsed Time at  ' + str(e) + '/' + str(num_epoch) + ' epochs, ' + str(
+                            time.time() - train_start_time) + ' sec')
+                else:
+                    print('epoch: ' + str(e) + ', pseudo_g_loss: ' + str(pseudo_g_loss))
+                    if itr % 10 == 0:
+                        cv2.imwrite(out_dir + '/' + str(itr) + '.jpg', 255 * g_x_imgs[0])
+
+                        print('Elapsed Time at  ' + str(e) + '/' + str(num_epoch) + ' epochs, ' + str(
+                            time.time() - train_start_time) + ' sec')
+
+            try:
+                print('Saving model...')
+                total_saver = tf.train.Saver()
+                total_saver.save(sess, model_path)
+                print('Saved.')
+            except:
+                print('Save failed')
+
+            if (e+1) % 30 == 0:
+                test_mask = create_roi_mask(input_width, input_height, offset=65)
+                test_effective_pixels = np.sum(test_mask)
                 te_files = os.listdir(te_dir)
                 te_batch = zip(range(0, len(te_files), batch_size),
                                range(batch_size, len(te_files) + 1, batch_size))
                 for t_s, t_e in te_batch:
-                    test_imgs, _, _ = load_images(te_files[t_s:t_e], base_dir=te_dir, mask=roi_mask_img)
+                    test_imgs, _ = load_images(te_files[t_s:t_e], base_dir=te_dir)
                     gx_imgs, u_gx_imgs = sess.run([G_X, U_G_X], feed_dict={X_IN: test_imgs, Y_IN: test_imgs, B_TRAIN: False})
 
-                    delta_imgs = np.abs(u_gx_imgs - test_imgs) * roi_mask_img
+                    delta_imgs = np.abs(u_gx_imgs - test_imgs) * test_mask
 
                     for i in range(batch_size):
                         cv2.imwrite('out/' + te_files[t_s + i], 255 * u_gx_imgs[i])
-                        '''    
-                        # Step 1
-                        th = cv2.normalize(delta_imgs[i], dst=None, alpha=0, beta=255, norm_type=cv2.NORM_MINMAX,
-                                           dtype=cv2.CV_8U)
-                        th = cv2.cvtColor(th, cv2.COLOR_RGB2GRAY)
-                        mean_pixel = np.sum(th) // num_effective_pixels
-                        max_pixel = np.max(th)
-                        std_pixel = np.sqrt(np.sum(np.square(th - mean_pixel)) // num_effective_pixels)
-                        threashold = mean_pixel + 1 * std_pixel
-                        th = np.where(th < threashold, threashold, th)
-
-                        # Step 2
-                        th = cv2.normalize(th, dst=None, alpha=0, beta=255, norm_type=cv2.NORM_MINMAX, dtype=cv2.CV_8U)
-                        '''
-                        cv2.imwrite('out/delta_img_' + te_files[t_s + i], 255 * (1.0 - delta_imgs[i]))
-                        s = calculate_anomaly_score(255 * delta_imgs[i], input_width, input_height, filter_size=32)
-                        print('anomaly score of ' + te_files[t_s + i] + ': ' + str(s))
+                        cv2.imwrite('out/delta_img_' + te_files[t_s + i], 255 * delta_imgs[i])
+                        #s = calculate_anomaly_score(255 * delta_imgs[i], input_width, input_height, filter_size=32)
+                        print('Test: ' + te_files[t_s + i])
 
 
 def calculate_anomaly_score(img, width, height, filter_size=16):
@@ -814,16 +930,11 @@ def calculate_anomaly_score(img, width, height, filter_size=16):
 def test(model_path):
     print('Please wait. Preparing to test...')
 
-    # Mask Creation
-    score_mask = create_roi_mask(input_width, input_height, offset=65)
-
     if use_roi_mask is True:
         print('Create RoI Mask Image.')
         roi_mask_img = create_roi_mask(input_width, input_height, offset=60)
-        num_effective_pixels = np.sum(score_mask)
     else:
         roi_mask_img = None
-        num_effective_pixels = input_width * input_height
 
     X_IN = tf.placeholder(tf.float32, [None, input_height, input_width, num_channel])
     B_TRAIN = tf.placeholder(tf.bool)
@@ -839,8 +950,13 @@ def test(model_path):
     G_X = decoder(latent_g, style, norm='layer', scope=G_Decoder_scope, b_train=B_TRAIN)
 
     unet_input = tf.concat([G_X, X_IN], axis=-1)
+    #unet_input = tf.concat([tf.abs(G_X - X_IN), G_X, X_IN], axis=-1)
     z_gen, laterals = unet_encoder(unet_input, norm='layer', scope=G_UNet_Encoder_scope, b_train=B_TRAIN)
-    U_G_X = unet_decoder(z_gen, laterals, norm='layer', scope=G_UNet_Decoder_scope, b_train=B_TRAIN)
+
+    if use_unet3 is True:
+        U_G_X = unet3_decoder(z_gen, laterals, norm='layer', scope=G_UNet_Decoder_scope, b_train=B_TRAIN)
+    else:
+        U_G_X = unet_decoder(z_gen, laterals, norm='layer', scope=G_UNet_Decoder_scope, b_train=B_TRAIN)
 
     unet_encoder_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=G_UNet_Encoder_scope)
     unet_decoder_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=G_UNet_Decoder_scope)
@@ -871,21 +987,19 @@ def test(model_path):
         batch_size = 1
         te_batch = zip(range(0, len(te_files), batch_size),
                        range(batch_size, len(te_files) + 1, batch_size))
+
+        test_mask = create_roi_mask(input_width, input_height, offset=45)
+        test_effective_pixels = np.sum(test_mask)
+
         for t_s, t_e in te_batch:
-            test_imgs, _, _ = load_images(te_files[t_s:t_e], base_dir=te_dir, mask=roi_mask_img)
-            u_gx_imgs = sess.run([U_G_X], feed_dict={X_IN: test_imgs, B_TRAIN: False})
+            test_imgs, _ = load_images(te_files[t_s:t_e], base_dir=te_dir)
+            u_gx_imgs = sess.run(U_G_X, feed_dict={X_IN: test_imgs, B_TRAIN: False})
 
             for i in range(batch_size):
-                #seg_imgs[i] = np.where(seg_imgs[i] > 0.5, seg_imgs[i], 0)
-                #delta_img = np.abs((u_gx_imgs[i] - test_imgs[i]) * seg_imgs[i])
                 cv2.imwrite('out/' + te_files[t_s + i], 255 * u_gx_imgs[i])
-                delta_img = delta_img * roi_mask_img
-                delta_img = cv2.normalize(delta_img, dst=None, alpha=0, beta=255, norm_type=cv2.NORM_MINMAX, dtype=cv2.CV_8U)
-                '''
-                th = cv2.cvtColor(th, cv2.COLOR_RGB2GRAY)
-                '''
-                cv2.imwrite('out/delta_img_' + te_files[t_s + i], 255 - delta_img)
-                s = calculate_anomaly_score(delta_img, input_width, input_height, filter_size=32)
+                delta_imgs = np.abs(u_gx_imgs - test_imgs) * test_mask
+                cv2.imwrite('out/delta_img_' + te_files[t_s + i], 255 * delta_imgs[i])
+                s = calculate_anomaly_score(delta_imgs[i], input_width, input_height, filter_size=32)
                 print('anomaly score of ' + te_files[t_s + i] + ': ' + str(s))
 
 
@@ -918,9 +1032,18 @@ if __name__ == '__main__':
     alpha = args.alpha
     aug_data = args.aug_data
     bg_mask_data = args.bgmask_data
+    noise_data = 'data/noise'
 
+    use_unet3 = True
+    unet3_unit_block_depth = 8
     unit_block_depth = 8
-    unet_unit_block_depth = 16
+    unet_unit_block_depth = 8
+
+    if use_unet3 is False:
+        unet3_unit_block_depth = 8
+        unit_block_depth = 8
+        unet_unit_block_depth = 8
+
     disc_unit_block_depth = 8
     bottleneck_num = 0
     decoder_bottleneck_num = 0
@@ -936,13 +1059,11 @@ if __name__ == '__main__':
     num_channel = 3
     use_style = False
     use_categorical_constraints = True
-    use_roi_mask = True
-    use_outlier_samples = True
-    use_bg_mask_samples = False
+    use_roi_mask = False
+    use_outlier_samples = False
+    use_noise_samples = False
     num_samples_per_class = 20
-
-    if use_bg_mask_samples is True:
-        bg_mask_sample_files = []
+    encoder_pretrain = 20
 
     if mode == 'train':
         train(model_path)
