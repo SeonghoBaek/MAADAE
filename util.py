@@ -21,8 +21,8 @@ def rotate_image(img, angle, scale=1):
     else:
         h, w = img.shape
 
-    rad_angle = float(angle) * math.pi / 180
-    M = cv2.getRotationMatrix2D((w / 2, h / 2), rad_angle, scale)
+    #rad_angle = float(angle) * math.pi / 180
+    M = cv2.getRotationMatrix2D((w / 2, h / 2), angle, scale)
     r_img = cv2.warpAffine(img, M, (w, h))
 
     return r_img
