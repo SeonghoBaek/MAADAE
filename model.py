@@ -4,6 +4,7 @@
 
 
 import math
+
 import tensorflow as tf
 import numpy as np
 import os
@@ -694,7 +695,6 @@ def train(model_path='None'):
     G_X = decoder(latent_g, style, norm='layer', scope=G_Decoder_scope, b_train=B_TRAIN)
 
     unet_input = tf.concat([G_X, X_IN], axis=-1)
-    #unet_input = tf.concat([tf.abs(G_X - X_IN), G_X, X_IN], axis=-1)
     z_gen, laterals = unet_encoder(unet_input, norm='layer', scope=G_UNet_Encoder_scope, b_train=B_TRAIN)
 
     if use_unet3 is True:
@@ -766,12 +766,12 @@ def train(model_path='None'):
         try:
             pseudo_generator_saver = tf.train.Saver(pseudo_generator_vars)
             unet_generator_saver = tf.train.Saver(unet_generator_vars)
-            print('Load pseudo-generator...')
+
             pseudo_generator_saver.restore(sess, model_path)
+            print('Load pseudo-generator.')
             num_pretrain = 0
-            print('Load unet-generator...')
             unet_generator_saver.restore(sess, model_path)
-            print('Model Restored')
+            print('Load unet-generator.')
         except:
             if num_pretrain == 0:
                 print('Start Training UNet Generator Only. Wait ...')
@@ -889,7 +889,6 @@ def train(model_path='None'):
 
             if (e+1) % 30 == 0:
                 test_mask = create_roi_mask(input_width, input_height, offset=65)
-                test_effective_pixels = np.sum(test_mask)
                 te_files = os.listdir(te_dir)
                 te_batch = zip(range(0, len(te_files), batch_size),
                                range(batch_size, len(te_files) + 1, batch_size))
@@ -950,7 +949,6 @@ def test(model_path):
     G_X = decoder(latent_g, style, norm='layer', scope=G_Decoder_scope, b_train=B_TRAIN)
 
     unet_input = tf.concat([G_X, X_IN], axis=-1)
-    #unet_input = tf.concat([tf.abs(G_X - X_IN), G_X, X_IN], axis=-1)
     z_gen, laterals = unet_encoder(unet_input, norm='layer', scope=G_UNet_Encoder_scope, b_train=B_TRAIN)
 
     if use_unet3 is True:
@@ -989,7 +987,6 @@ def test(model_path):
                        range(batch_size, len(te_files) + 1, batch_size))
 
         test_mask = create_roi_mask(input_width, input_height, offset=45)
-        test_effective_pixels = np.sum(test_mask)
 
         for t_s, t_e in te_batch:
             test_imgs, _ = load_images(te_files[t_s:t_e], base_dir=te_dir)
@@ -1011,6 +1008,7 @@ if __name__ == '__main__':
     parser.add_argument('--train_data', type=str, help='training data directory', default='data/train')
     parser.add_argument('--test_data', type=str, help='test data directory', default='data/test')
     parser.add_argument('--aug_data', type=str, help='augmentation samples', default='data/augmentation')
+    parser.add_argument('--noise_data', type=str, help='specific noise data samples', default='data/noise')
     parser.add_argument('--out_dir', type=str, help='output directory', default='imgs')
     parser.add_argument('--bgmask_data', type=str, help='background mask sample director', default='bgmask')
     parser.add_argument('--img_size', type=int, help='training image size', default=512)
@@ -1032,17 +1030,14 @@ if __name__ == '__main__':
     alpha = args.alpha
     aug_data = args.aug_data
     bg_mask_data = args.bgmask_data
-    noise_data = 'data/noise'
+    noise_data = args.noise_data
 
     use_unet3 = True
+    if use_unet3 is True:
+        batch_size = 8
     unet3_unit_block_depth = 8
     unit_block_depth = 8
     unet_unit_block_depth = 8
-
-    if use_unet3 is False:
-        unet3_unit_block_depth = 8
-        unit_block_depth = 8
-        unet_unit_block_depth = 8
 
     disc_unit_block_depth = 8
     bottleneck_num = 0
