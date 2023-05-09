@@ -2,7 +2,6 @@
 # Author: Seongho Baek
 # Contact: seonghobaek@gmail.com
 # ==============================================================================
-
 import tensorflow as tf
 import numpy as np
 
@@ -127,10 +126,10 @@ def batch_norm(x, b_train, scope, reuse=False):
 
 
 def coord_conv(input, scope, filter_dims, stride_dims, padding='SAME',
-               non_linear_fn=tf.nn.relu, dilation=[1, 1, 1, 1], bias=True, sn=False):
+               non_linear_fn=tf.nn.relu, dilation=[1, 1, 1, 1], bias=False, sn=False):
     input_dims = input.get_shape().as_list()
     batch_size, height, width, channels = input_dims
-
+    batch_size = 1
     xx_ones = tf.ones([batch_size, width], dtype=tf.int32)
     xx_ones = tf.expand_dims(xx_ones, -1)
     xx_range = tf.tile(tf.expand_dims(tf.range(height), 0), [batch_size, 1])
@@ -157,7 +156,8 @@ def coord_conv(input, scope, filter_dims, stride_dims, padding='SAME',
 
     coord_tensor = tf.concat([input, xx_channel, yy_channel, rr], axis=-1)
 
-    return conv(coord_tensor, scope, filter_dims, stride_dims, padding, non_linear_fn, dilation, bias, sn)
+    return conv(coord_tensor, scope, filter_dims=filter_dims, stride_dims=stride_dims, padding=padding,
+                non_linear_fn=non_linear_fn, dilation=dilation)
 
 
 def depthwise_conv(input, filter_dims, stride_dims, padding='SAME', pad=0, non_linear_fn=tf.nn.relu, bias=False,
@@ -503,6 +503,47 @@ def deconv(input_data, b_size, scope, filter_dims, stride_dims, padding='SAME', 
         return map
 
 
+def context_attention(x, channels=0, act_func=tf.nn.relu, scope='context_attention'):
+    with tf.variable_scope(scope, reuse=tf.AUTO_REUSE):
+        batch_size, height, width, num_channels = x.get_shape().as_list()
+
+        if channels == 0:
+            channels = num_channels
+
+        reduce_channels = channels // 4
+
+        Q = conv(x, scope='Q_conv', filter_dims=[1, 1, reduce_channels], stride_dims=[1, 1], non_linear_fn=act_func)
+        print('attention Q dims: ' + str(Q.get_shape().as_list()))
+
+        K = conv(x, scope='K_conv', filter_dims=[1, 1, reduce_channels], stride_dims=[1, 1], non_linear_fn=act_func)
+        print('attention K dims: ' + str(K.get_shape().as_list()))
+
+        V = conv(x, scope='V_conv', filter_dims=[1, 1, channels], stride_dims=[1, 1], non_linear_fn=act_func)
+        print('attention V dims: ' + str(V.get_shape().as_list()))
+
+        # N = h * w
+        Q1 = tf.reshape(Q, shape=[-1, Q.shape[1] * Q.shape[2], Q.get_shape().as_list()[-1]])
+        print('attention Q1 flat dims: ' + str(Q1.get_shape().as_list()))
+
+        K1 = tf.reshape(K, shape=[-1, K.shape[1] * K.shape[2], K.shape[-1]])
+        print('attention K1 flat dims: ' + str(K1.get_shape().as_list()))
+
+        s = tf.matmul(Q1, K1, transpose_b=True)  # # [bs, N, N]
+        affinity = tf.nn.softmax(s)  # attention map
+        print('affinity dims: ' + str(affinity.get_shape().as_list()))
+
+        V1 = tf.reshape(V, shape=[-1, V.shape[1] * V.shape[2], V.shape[-1]])
+        print('attention V flat dims: ' + str(V1.get_shape().as_list()))
+
+        o = tf.matmul(affinity, V1)  # [bs, N, N] x [bs, N, C] = [bs, N, C]
+        print('affinity multiply: ' + str(o.get_shape().as_list()))
+
+        o = tf.reshape(o, shape=[-1, height, width, channels])  # [bs, h, w, C]
+        x = o + x
+
+        return x
+
+
 def self_attention(x, channels=0, act_func=tf.nn.relu, scope='attention'):
     with tf.variable_scope(scope, reuse=tf.AUTO_REUSE):
         batch_size, height, width, num_channels = x.get_shape().as_list()
@@ -543,7 +584,7 @@ def self_attention(x, channels=0, act_func=tf.nn.relu, scope='attention'):
         o = conv(o, scope='attn_conv', filter_dims=[1, 1, channels], stride_dims=[1, 1], non_linear_fn=act_func)
         x = gamma * o + x
 
-    return x
+        return x
 
 
 def spectral_norm(w, iteration=1, scope='sn'):
@@ -770,7 +811,7 @@ def add_se_adain_residual_block(in_layer, style_alpha, style_beta, filter_dims, 
 
         l = se_block(l, scope='se_block')
         l = tf.add(l, in_layer)
-        #l = act_func(l)
+        l = act_func(l)
 
     return l
 
@@ -811,7 +852,7 @@ def add_se_residual_block(in_layer, filter_dims, act_func=tf.nn.relu, norm='laye
 
         l = se_block(l, scope='se_block')
         l = tf.add(l, in_layer)
-        #l = act_func(l)
+        l = act_func(l)
 
     return l
 
@@ -835,11 +876,11 @@ def add_residual_block(in_layer, filter_dims, act_func=tf.nn.relu, norm='layer',
         else:
             bn_depth = num_channel_out
             # Bottle Neck Layer
-            use_bottleneck = True
+            use_bottleneck = False
 
             if use_bottleneck is True:
                 # Bottle Neck Layer
-                bn_depth = num_channel_out // 4
+                bn_depth = num_channel_out // 2
                 l = conv(l, scope='bt_conv1', filter_dims=[1, 1, bn_depth], stride_dims=[1, 1], non_linear_fn=None)
                 l = conv_normalize(l, norm=norm, b_train=b_train, scope='bt_norm1')
                 l = act_func(l)
@@ -853,8 +894,8 @@ def add_residual_block(in_layer, filter_dims, act_func=tf.nn.relu, norm='layer',
                                        norm=norm, b_train=b_train, scope='residual_layer1', padding=padding, pad=pad,
                                        num_groups=num_groups)
 
-        # ViT style
-        #l = act_func(l)
+        l = tf.add(l, in_layer)
+        l = act_func(l)
 
     return l
 
@@ -1016,7 +1057,7 @@ class ConvGRUCell(tf.nn.rnn_cell.RNNCell):
         return h, h
 
 
-def sigmoid(x, slope=1.0, shift=0.0):
+def sigmoid(x, slope=2.0, shift=0.0):
     return tf.constant(1.) / (tf.constant(1.) + tf.exp(-tf.constant(1.0) * ((x - shift) * slope)))
 
 
