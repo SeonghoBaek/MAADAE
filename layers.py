@@ -1,6 +1,7 @@
 # ==============================================================================
 # Author: Seongho Baek
 # Contact: seonghobaek@gmail.com
+#
 # ==============================================================================
 import tensorflow as tf
 import numpy as np
@@ -547,10 +548,24 @@ def context_attention(x, channels=0, act_func=tf.nn.relu, scope='context_attenti
 def self_attention(x, channels=0, act_func=tf.nn.relu, scope='attention'):
     with tf.variable_scope(scope, reuse=tf.AUTO_REUSE):
         batch_size, height, width, num_channels = x.get_shape().as_list()
-
+        N = height * width
         if channels == 0:
             channels = num_channels
 
+        f = conv(x, scope='f_conv', filter_dims=[1, 1, channels // 8], stride_dims=[1, 1], non_linear_fn=act_func)
+        f = tf.reshape(f, shape=[-1, N, f.shape[-1]])
+        g = conv(x, scope='g_conv', filter_dims=[1, 1, channels // 8], stride_dims=[1, 1], non_linear_fn=act_func)
+        g = tf.reshape(g, shape=[-1, N, g.shape[-1]])
+        h = conv(x, scope='h_conv', filter_dims=[1, 1, channels], stride_dims=[1, 1], non_linear_fn=act_func)
+        h = tf.reshape(h, shape=[-1, N, h.shape[-1]])
+
+        s = tf.matmul(g, h, transpose_a=True)  # [B, C/8, N] * [B, N, C] = [B, C/8, C]
+        s = tf.divide(s, N)  # [B, C/8, C]
+        o = tf.matmul(f, s)  # [B, N, C/8] * [B, C/8, C] = [B, N, C]
+        o = tf.reshape(o, shape=[-1, height, width, channels])
+
+        x = tf.add(x, o)
+        '''
         f = conv(x, scope='f_conv', filter_dims=[1, 1, channels // 8], stride_dims=[1, 1], non_linear_fn=act_func)
         f = tf.layers.max_pooling2d(f, pool_size=4, strides=4, padding='SAME')
         print('attention f dims: ' + str(f.get_shape().as_list()))
@@ -583,7 +598,7 @@ def self_attention(x, channels=0, act_func=tf.nn.relu, scope='attention'):
         o = tf.reshape(o, shape=[-1, height, width, num_channels // 8])  # [bs, h, w, C]
         o = conv(o, scope='attn_conv', filter_dims=[1, 1, channels], stride_dims=[1, 1], non_linear_fn=act_func)
         x = gamma * o + x
-
+        '''
         return x
 
 
@@ -768,7 +783,7 @@ def se_block(input, scope='squeeze_excitation'):
         # Excitation
         sl = tf.expand_dims(sl, axis=1)
         sl = tf.expand_dims(sl, axis=2)
-        l = tf.multiply(l, sl)
+        l = tf.multiply(sl, l)
 
         return l
 
