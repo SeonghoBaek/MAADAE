@@ -773,19 +773,52 @@ def add_residual_dense_block(in_layer, filter_dims, num_layers, act_func=tf.nn.r
         return l
 
 
-def se_block(input, scope='squeeze_excitation'):
+def se_block(input, num_channel_out=-1, b_multiply=False, ratio=8, scope='squeeze_excitation'):
     with tf.variable_scope(scope, reuse=tf.AUTO_REUSE):
-        num_channel_out = input.get_shape()[-1]
+        if num_channel_out == -1:
+            num_channel_out = input.get_shape()[-1]
         l = input
         sl = global_avg_pool(l, output_length=num_channel_out, scope='squeeze')
-        sl = fc(sl, out_dim=num_channel_out // 8, non_linear_fn=tf.nn.relu, scope='reduction')
+        sl = fc(sl, out_dim=num_channel_out // ratio, non_linear_fn=tf.nn.relu, scope='reduction')
         sl = fc(sl, out_dim=num_channel_out, non_linear_fn=tf.nn.sigmoid, scope='transform')
         # Excitation
         sl = tf.expand_dims(sl, axis=1)
         sl = tf.expand_dims(sl, axis=2)
-        l = tf.multiply(sl, l)
 
-        return l
+        if b_multiply is True:
+            sl = tf.multiply(sl, l)
+
+        return sl
+
+
+def ca_block(input, ratio=8, norm='instance', scope='cord_attention', b_train=True):
+    with tf.variable_scope(scope, reuse=tf.AUTO_REUSE):
+        _, h, w, c = input.get_shape().as_list()
+
+        l_h = tf.nn.avg_pool(input, ksize=[1, 1, w, 1], strides=[1, 1, 1, 1], padding='VALID')
+        #print('avg_pool h: ' + str(l_h.get_shape().as_list()))
+        l_w = tf.nn.avg_pool(input, ksize=[1, h, 1, 1], strides=[1, 1, 1, 1], padding='VALID')
+        #print('avg_pool w: ' + str(l_w.get_shape().as_list()))
+        l_w = tf.transpose(l_w, [0, 2, 1, 3])
+        #print('transpose w: ' + str(l_w.get_shape().as_list()))
+        l_c = tf.concat([l_h, l_w], axis=1)
+        l_c = conv(l_c, scope='squeeze', filter_dims=[1, 1, c // ratio], stride_dims=[1, 1],
+                   non_linear_fn=None)
+        l_c = conv_normalize(l_c, norm=norm, b_train=b_train, scope='norm')
+        l_c = tf.nn.leaky_relu(l_c)
+        #print('squeeze: ' + str(l_c.get_shape().as_list()))
+        l_h, l_w = tf.split(l_c, num_or_size_splits=2, axis=1)
+        l_w = tf.transpose(l_w, [0, 2, 1, 3])
+        l_h = conv(l_h, scope='excitate_h', filter_dims=[1, 1, c], stride_dims=[1, 1],
+                   non_linear_fn=tf.nn.sigmoid)
+        #print('excitate h: ' + str(l_h.get_shape().as_list()))
+        l_w = conv(l_w, scope='excitate_w', filter_dims=[1, 1, c], stride_dims=[1, 1],
+                   non_linear_fn=tf.nn.sigmoid)
+        #print('excitate w: ' + str(l_w.get_shape().as_list()))
+
+        ca = input * l_h * l_w
+
+        return ca
 
 
 def add_se_adain_residual_block(in_layer, style_alpha, style_beta, filter_dims, act_func=tf.nn.relu, use_bottleneck=False,
@@ -842,27 +875,42 @@ def add_se_residual_block(in_layer, filter_dims, act_func=tf.nn.relu, norm='laye
         # ResNext: Not good for image reconstruction
         if use_depthwise_conv is True:
             l = depthwise_conv(l, filter_dims=[filter_dims[0], filter_dims[1]], stride_dims=[1, 1], non_linear_fn=None,
-                               padding=padding, pad=pad)
-            l = conv_normalize(l, norm=norm, b_train=b_train, scope='norm1')
-            l = conv(l, scope='residual_invt_1', filter_dims=[1, 1, num_channel_out * 4], stride_dims=[1, 1],
-                     non_linear_fn=act_func)
-            l = conv(l, scope='residual_invt_2', filter_dims=[1, 1, num_channel_out], stride_dims=[1, 1], non_linear_fn=None)
-            l = conv_normalize(l, norm=norm, b_train=b_train, scope='norm2')
+                               padding=padding, pad=pad, scope='dwc1')
+            l = conv_normalize(l, norm=norm, b_train=b_train, scope='dwc_norm1')
+            l = conv(l, scope='pwc1', filter_dims=[1, 1, num_channel_out], stride_dims=[1, 1], non_linear_fn=None)
+            l = conv_normalize(l, norm=norm, b_train=b_train, scope='pwc_norm1')
+            l = act_func(l)
+
+            l = depthwise_conv(l, filter_dims=[filter_dims[0], filter_dims[1]], stride_dims=[1, 1], non_linear_fn=None,
+                               padding=padding, pad=pad, scope='dwc2')
+            l = conv_normalize(l, norm=norm, b_train=b_train, scope='dwc_norm2')
+            l = conv(l, scope='pwc2', filter_dims=[1, 1, num_channel_out], stride_dims=[1, 1],
+                     non_linear_fn=None)
+            l = conv_normalize(l, norm=norm, b_train=b_train, scope='pwc_norm2')
         else:
             bn_depth = num_channel_out
             # Bottle Neck Layer
+            use_bottleneck = False
+
             if use_bottleneck is True:
                 # Bottle Neck Layer
-                bn_depth = num_channel_out // 4
+                bn_depth = num_channel_out // 2
                 l = conv(l, scope='bt_conv1', filter_dims=[1, 1, bn_depth], stride_dims=[1, 1], non_linear_fn=None)
-
-                l = add_residual_layer(l, filter_dims=[filter_dims[0], filter_dims[1], bn_depth], act_func=act_func, norm=None,
-                                       b_train=b_train, scope='residual_layer1', padding=padding, pad=pad, num_groups=num_groups)
-                l = conv(l, scope='bt_conv2', filter_dims=[1, 1, num_channel_out], stride_dims=[1, 1], non_linear_fn=None)
-                l = conv_normalize(l, norm=norm, b_train=b_train, scope='bt_norm')
+                l = conv_normalize(l, norm=norm, b_train=b_train, scope='bt_norm1')
+                l = act_func(l)
+                l = add_residual_layer(l, filter_dims=[filter_dims[0], filter_dims[1], bn_depth], act_func=act_func,
+                                       norm=norm,
+                                       b_train=b_train,
+                                       scope='residual_layer1', padding=padding, pad=pad, num_groups=num_groups)
+                l = conv(l, scope='bt_conv2', filter_dims=[1, 1, num_channel_out], stride_dims=[1, 1],
+                         non_linear_fn=None)
+                l = conv_normalize(l, norm=norm, b_train=b_train, scope='bt_norm3')
             else:
                 l = add_residual_layer(l, filter_dims=[filter_dims[0], filter_dims[1], bn_depth], act_func=act_func,
                                        norm=norm, b_train=b_train, scope='residual_layer1', padding=padding, pad=pad,
+                                       num_groups=num_groups)
+                l = add_residual_layer(l, filter_dims=[filter_dims[0], filter_dims[1], bn_depth], act_func=None,
+                                       norm=norm, b_train=b_train, scope='residual_layer2', padding=padding, pad=pad,
                                        num_groups=num_groups)
 
         l = se_block(l, scope='se_block')
@@ -882,12 +930,18 @@ def add_residual_block(in_layer, filter_dims, act_func=tf.nn.relu, norm='layer',
         # ResNext: Not good for image reconstruction
         if use_depthwise_conv is True:
             l = depthwise_conv(l, filter_dims=[filter_dims[0], filter_dims[1]], stride_dims=[1, 1], non_linear_fn=None,
-                               padding=padding, pad=pad)
-            l = conv_normalize(l, norm=norm, b_train=b_train, scope='norm1')
-            l = conv(l, scope='residual_invt_1', filter_dims=[1, 1, num_channel_out * 4], stride_dims=[1, 1],
-                     non_linear_fn=act_func)
-            l = conv(l, scope='residual_invt_2', filter_dims=[1, 1, num_channel_out], stride_dims=[1, 1], non_linear_fn=None)
-            l = conv_normalize(l, norm=norm, b_train=b_train, scope='norm2')
+                               padding=padding, pad=pad, scope='dwc1')
+            l = conv_normalize(l, norm=norm, b_train=b_train, scope='dwc_norm1')
+            l = conv(l, scope='pwc1', filter_dims=[1, 1, num_channel_out], stride_dims=[1, 1], non_linear_fn=None)
+            l = conv_normalize(l, norm=norm, b_train=b_train, scope='pwc_norm1')
+            l = act_func(l)
+
+            l = depthwise_conv(l, filter_dims=[filter_dims[0], filter_dims[1]], stride_dims=[1, 1], non_linear_fn=None,
+                               padding=padding, pad=pad, scope='dwc2')
+            l = conv_normalize(l, norm=norm, b_train=b_train, scope='dwc_norm2')
+            l = conv(l, scope='pwc2', filter_dims=[1, 1, num_channel_out], stride_dims=[1, 1],
+                     non_linear_fn=None)
+            l = conv_normalize(l, norm=norm, b_train=b_train, scope='pwc_norm2')
         else:
             bn_depth = num_channel_out
             # Bottle Neck Layer
@@ -905,10 +959,13 @@ def add_residual_block(in_layer, filter_dims, act_func=tf.nn.relu, norm='layer',
                 l = conv(l, scope='bt_conv2', filter_dims=[1, 1, num_channel_out], stride_dims=[1, 1], non_linear_fn=None)
                 l = conv_normalize(l, norm=norm, b_train=b_train, scope='bt_norm3')
             else:
-                l = add_residual_layer(l, filter_dims=[filter_dims[0], filter_dims[1], bn_depth], act_func=None,
+                l = add_residual_layer(l, filter_dims=[filter_dims[0], filter_dims[1], bn_depth], act_func=act_func,
                                        norm=norm, b_train=b_train, scope='residual_layer1', padding=padding, pad=pad,
                                        num_groups=num_groups)
-
+                l = add_residual_layer(l, filter_dims=[filter_dims[0], filter_dims[1], bn_depth], act_func=None,
+                                       norm=norm, b_train=b_train, scope='residual_layer2', padding=padding, pad=pad,
+                                       num_groups=num_groups)
+        l = ca_block(l, norm=norm, b_train=b_train)
         l = tf.add(l, in_layer)
         l = act_func(l)
 
