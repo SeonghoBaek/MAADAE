@@ -1,7 +1,7 @@
 # MAADAE[meidei]: Memory Augmented Adversarial Dual AUto Encoder
 # Author: Seongho Baek
 # e-mail: seonghobaek@gmail.com
-import math
+
 
 import tensorflow as tf
 import numpy as np
@@ -14,14 +14,12 @@ import time
 import util
 
 # scope
-G_Encoder_scope = 'generator_encoder'
-G_Decoder_scope = 'generator_decoder'
-Style_Encoder_scope = 'style_encoder'
-Style_M_scope = 'style_mem'
-G_M_scope = 'generator_mem'
-G_UNet_Encoder_scope = 'unet_generator_encoder'
-G_UNet_Decoder_scope = 'unet_generator_decoder'
-D_scope = 'discriminator'
+Qeury_Encoder_Scope = 'generator_encoder'
+Image_Reconstructor_Scope = 'generator_decoder'
+LATENT_Memory_scope = 'generator_mem'
+SEGMENT_Encoder_scope = 'unet_generator_encoder'
+SEGMENT_Decoder_scope = 'unet_generator_decoder'
+DISC_scope = 'discriminator'
 
 
 def load_images(file_name_list, base_dir=None, mask=None, mask_noise=None, cutout=False, cutout_mask=None,
@@ -63,7 +61,8 @@ def load_images(file_name_list, base_dir=None, mask=None, mask_noise=None, cutou
                     img = util.rotate_image(img, rot)
 
                 if flip is True:
-                    img = cv2.flip(img, np.random.randint(low=0, high=2))
+                    if np.random.randint(low=0, high=10) > 5:
+                        img = cv2.flip(img, 1)
 
                 if shift is True:
                     x_shift = np.random.randint(-7, 7)
@@ -279,16 +278,16 @@ def get_discriminator_loss(real, fake, type='wgan', gamma=1.0):
         return tf.reduce_mean((real - fake) ** 2)
 
 
-def encoder(in_tensor, activation=tf.nn.relu, norm='instance', scope='encoder', b_train=False):
+def query_encoder(in_tensor, activation=tf.nn.relu, norm='instance', scope='encoder', b_train=False):
     with tf.variable_scope(scope, reuse=tf.AUTO_REUSE):
-        print(scope + ' encoder input: ' + str(in_tensor.get_shape().as_list()))
+        print('Query encoder input: ' + str(in_tensor.get_shape().as_list()))
         num_bottleneck = bottleneck_num
         block_depth = unit_block_depth
 
         l = layers.conv(in_tensor, scope='init', filter_dims=[5, 5, block_depth], stride_dims=[1, 1],
                         non_linear_fn=activation)
 
-        print(scope + ' Downsample: ' + str(l.get_shape().as_list()))
+        print(' Downsample: ' + str(l.get_shape().as_list()))
 
         for i in range(downsample_num + 1):
             block_depth = block_depth * 2
@@ -297,13 +296,13 @@ def encoder(in_tensor, activation=tf.nn.relu, norm='instance', scope='encoder', 
             l = layers.conv_normalize(l, norm=norm, b_train=b_train, scope='encoder_norm_' + str(i))
             l = activation(l)
 
-            print(scope + ' Downsample: ' + str(l.get_shape().as_list()))
+            print(' Downsample: ' + str(l.get_shape().as_list()))
 
         for i in range(num_bottleneck):
             l = layers.add_se_residual_block(l, filter_dims=[3, 3, block_depth],
                                              act_func=activation, scope=scope + '_bt_block_' + str(i))
 
-            print(scope + ' Bottleneck Block : ' + str(l.get_shape().as_list()))
+            print(' Bottleneck Block : ' + str(l.get_shape().as_list()))
 
         if num_bottleneck > 0:
             l = activation(l)
@@ -316,32 +315,19 @@ def encoder(in_tensor, activation=tf.nn.relu, norm='instance', scope='encoder', 
     return query
 
 
-def decoder(content, style=None, activation=tf.nn.relu, norm='instance', scope='decoder', b_train=False):
+def image_reconstructor(content, activation=tf.nn.relu, norm='instance', scope='decoder', b_train=False):
     with tf.variable_scope(scope, reuse=tf.AUTO_REUSE):
-        print(scope + ' decoder input: ' + str(content.get_shape().as_list()))
+        print('Image Reconstructor Input: ' + str(content.get_shape().as_list()))
         block_depth = unit_block_depth * (2 ** (1 + upsample_num))
 
         l = content
         l = layers.conv(l, scope='init', filter_dims=[3, 3, block_depth], stride_dims=[1, 1], non_linear_fn=activation)
 
-        if style is not None:
-            target_depth = block_depth
-            style_alpha = layers.fc(style, target_depth, non_linear_fn=None, scope='style_alpha')
-            style_beta = layers.fc(style, target_depth, non_linear_fn=None, scope='style_beta')
-            style_alpha = tf.reshape(style_alpha, shape=[-1, 1, 1, target_depth])
-            style_beta = tf.reshape(style_beta, shape=[-1, 1, 1, target_depth])
+        for i in range(decoder_bottleneck_num):
+            l = layers.add_se_residual_block(l, filter_dims=[3, 3, block_depth],
+                                             act_func=activation, scope=scope + '_bt_block_' + str(i))
 
-            for i in range(decoder_bottleneck_num):
-                l = layers.add_se_adain_residual_block(l, style_alpha, style_beta, filter_dims=[3, 3, block_depth],
-                                                       act_func=activation, scope=scope + '_bt_block_' + str(i))
-
-                print(scope + ' Bottleneck Block : ' + str(l.get_shape().as_list()))
-        else:
-            for i in range(decoder_bottleneck_num):
-                l = layers.add_se_residual_block(l, filter_dims=[3, 3, block_depth],
-                                                 act_func=activation, scope=scope + '_bt_block_' + str(i))
-
-                print(scope + ' Bottleneck Block : ' + str(l.get_shape().as_list()))
+            print(' Bottleneck Block : ' + str(l.get_shape().as_list()))
 
         if decoder_bottleneck_num > 0:
             l = layers.conv(l, scope='upsample_init', filter_dims=[3, 3, block_depth], stride_dims=[1, 1],
@@ -359,68 +345,38 @@ def decoder(content, style=None, activation=tf.nn.relu, norm='instance', scope='
                             stride_dims=[1, 1], non_linear_fn=None)
             l = layers.conv_normalize(l, norm=norm, b_train=b_train, scope='upsample_norm_' + str(i))
             l = activation(l)
-            print(scope + ' Upsampling: ' + str(l.get_shape().as_list()))
+            print(' Upsampling: ' + str(l.get_shape().as_list()))
 
         l = activation(l)
         img = layers.conv(l, scope='last', filter_dims=[5, 5, num_channel], stride_dims=[1, 1], non_linear_fn=None)
-        print(scope + ' Output: ' + str(img.get_shape().as_list()))
+        print(' Output: ' + str(img.get_shape().as_list()))
 
     return img, latents
 
 
-def style_encoder(in_tensor, activation=util.swish, norm='layer', scope='style_encoder', b_train=False):
+def segment_encoder(in_tensor, mem_latents, activation=tf.nn.relu, norm='instance', scope='unet_encoder', b_train=False):
     with tf.variable_scope(scope, reuse=tf.AUTO_REUSE):
-        print(scope + ' encoder input: ' + str(in_tensor.get_shape().as_list()))
-        block_depth = unit_block_depth
-        style_tensor = layers.conv(in_tensor, scope='style_init1', filter_dims=[5, 5, block_depth], stride_dims=[1, 1],
-                                   non_linear_fn=activation)
-        style_tensor = layers.conv(style_tensor, scope='style_init2', filter_dims=[3, 3, block_depth],
-                                   stride_dims=[2, 2],
-                                   non_linear_fn=activation)
-        # Downsample stage.
-        l = style_tensor
-
-        for i in range(downsample_num):
-            l = layers.conv(l, scope='style_downsapmple1_' + str(i), filter_dims=[3, 3, block_depth],
-                            stride_dims=[1, 1],
-                            non_linear_fn=activation)
-            block_depth = block_depth + unit_block_depth
-            l = layers.conv(l, scope='style_downsapmple2_' + str(i), filter_dims=[3, 3, block_depth],
-                            stride_dims=[2, 2], non_linear_fn=activation)
-
-            print(scope + ' Style Downsample: ' + str(l.get_shape().as_list()))
-
-        l = layers.conv(l, scope='latent', filter_dims=[3, 3, block_depth], stride_dims=[1, 1],
-                        non_linear_fn=None)
-        _, h, w, c = l.get_shape().as_list()
-        l = tf.reshape(l, shape=[-1, h // 16, w // 16, block_depth * 16 * 16])
-        style = layers.global_avg_pool(l, style_dimension, scope='gap_style')
-
-    return style
-
-
-def unet_encoder(in_tensor, mem_latents, activation=tf.nn.relu, norm='instance', scope='unet_encoder', b_train=False):
-    with tf.variable_scope(scope, reuse=tf.AUTO_REUSE):
-        print(scope + ' encoder input: ' + str(in_tensor.get_shape().as_list()))
-        block_depth = unet_unit_block_depth
+        print('Segment encoder input: ' + str(in_tensor.get_shape().as_list()))
+        block_depth = segment_unit_block_depth
         lateral_layers = []
 
-        l = layers.conv(in_tensor, scope='init', filter_dims=[3, 3, 2 * unet_unit_block_depth], stride_dims=[2, 2],
+        l = layers.conv(in_tensor, scope='init', filter_dims=[3, 3, 2 * segment_unit_block_depth], stride_dims=[2, 2],
                         non_linear_fn=None)
         l = layers.conv_normalize(l, norm=norm, b_train=b_train, scope='init_norm')
         l = activation(l)
 
-        print(scope + ' init1: ' + str(l.get_shape().as_list()))
+        print(' init1: ' + str(l.get_shape().as_list()))
         _, h, w, _ = l.get_shape().as_list()
+
         ml = tf.image.resize_images(mem_latents, size=[h, w])
         l = tf.concat([l, ml], axis=-1)
-        l = layers.conv(l, scope='init2', filter_dims=[3, 3, unet_unit_block_depth], stride_dims=[1, 1], non_linear_fn=None)
-        print(scope + ' init2: ' + str(l.get_shape().as_list()))
+        l = layers.conv(l, scope='init2', filter_dims=[3, 3, segment_unit_block_depth], stride_dims=[1, 1], non_linear_fn=None)
+        print(' init2: ' + str(l.get_shape().as_list()))
         l = layers.conv_normalize(l, norm=norm, b_train=b_train, scope='init2_norm')
         l = activation(l)
-        l = layers.add_residual_block(l, filter_dims=[3, 3, unet_unit_block_depth], scope='init_resblock')
+        l = layers.add_residual_block(l, filter_dims=[3, 3, segment_unit_block_depth], scope='init_resblock')
 
-        print(scope + ' Add Lateral: ' + str(l.get_shape().as_list()))
+        print(' Add Lateral: ' + str(l.get_shape().as_list()))
         lateral_layers.append(l)
 
         for i in range(segmentation_downsample_num):
@@ -436,14 +392,14 @@ def unet_encoder(in_tensor, mem_latents, activation=tf.nn.relu, norm='instance',
             l = layers.conv_normalize(l, norm=norm, b_train=b_train, scope='mem_fusion_norm' + str(i))
             l = activation(l)
             l = layers.add_residual_block(l, filter_dims=[3, 3, block_depth], scope='dnsample_block_' + str(i))
-            print(scope + ' Add Lateral: ' + str(l.get_shape().as_list()))
+            print(' Add Lateral: ' + str(l.get_shape().as_list()))
             lateral_layers.append(l)
 
         for n_loop in range(2):
             for i in range(len(lateral_layers)):
                 _, h, w, c = lateral_layers[i].get_shape().as_list()
                 for num_rblock in range(2):
-                    print('Conv Layer: ' + str(lateral_layers[i].get_shape().as_list()))
+                    print(' Conv Layer: ' + str(lateral_layers[i].get_shape().as_list()))
                     lateral_layers[i] = layers.add_residual_block(lateral_layers[i], filter_dims=[3, 3, c],
                                                                   scope='loop_sqblock_' + str(n_loop) + str(i) + str(num_rblock))
 
@@ -458,6 +414,7 @@ def unet_encoder(in_tensor, mem_latents, activation=tf.nn.relu, norm='instance',
                         _, h, w, _ = l_lat.get_shape().as_list()
 
                         if l_h > h:
+                            # Resize
                             l_lat = layers.conv(l_lat, scope='shuffling_' + str(n_loop) + str(i) + str(j),
                                                 filter_dims=[3, 3, l_c],
                                                 stride_dims=[1, 1], non_linear_fn=None)
@@ -473,8 +430,7 @@ def unet_encoder(in_tensor, mem_latents, activation=tf.nn.relu, norm='instance',
                                                     scope='shuffling_dn_' + str(n_loop) + str(i) + str(j) + str(k),
                                                     filter_dims=[3, 3, l_c], stride_dims=[2, 2], non_linear_fn=None)
                                 l_lat = layers.conv_normalize(l_lat, norm=norm, b_train=b_train,
-                                                              scope='shuffling_dn_norm' + str(n_loop) + str(i) + str(
-                                                                  j) + str(k))
+                                                              scope='shuffling_dn_norm' + str(n_loop) + str(i) + str(j) + str(k))
                                 l_lat = activation(l_lat)
                         mixed_layer = tf.add(mixed_layer, l_lat)
                 fused_layers.append(mixed_layer)
@@ -484,7 +440,7 @@ def unet_encoder(in_tensor, mem_latents, activation=tf.nn.relu, norm='instance',
     return latent, lateral_layers
 
 
-def unet3_add_merge(lateral_layers, activation=tf.nn.relu, norm='instance', b_train=False, scope='unet3_add_merge'):
+def lateral_add_merge(lateral_layers, activation=tf.nn.relu, norm='instance', b_train=False, scope='unet3_add_merge'):
     with tf.variable_scope(scope, reuse=tf.AUTO_REUSE):
         _, target_h, target_w, target_depth = lateral_layers[-1].get_shape().as_list()
 
@@ -503,7 +459,7 @@ def unet3_add_merge(lateral_layers, activation=tf.nn.relu, norm='instance', b_tr
         return l
 
 
-def unet3_merge(lateral_layers, activation=tf.nn.relu, norm='instance',
+def lateral_merge(lateral_layers, activation=tf.nn.relu, norm='instance',
                 b_train=False, scope='unet3_merge'):
     with tf.variable_scope(scope, reuse=tf.AUTO_REUSE):
         _, target_h, target_w, target_depth = lateral_layers[-1].get_shape().as_list()
@@ -534,7 +490,7 @@ def unet3_merge(lateral_layers, activation=tf.nn.relu, norm='instance',
         return l
 
 
-def unet3_concat(lateral_layers, start_step=0, unit_block=8, activation=tf.nn.relu, norm='instance',
+def lateral_concat(lateral_layers, start_step=0, unit_block=8, activation=tf.nn.relu, norm='instance',
                  b_train=False, scope='unet3_concat'):
     with tf.variable_scope(scope, reuse=tf.AUTO_REUSE):
         _, target_h, target_w, _ = lateral_layers[start_step].get_shape().as_list()
@@ -568,11 +524,12 @@ def unet3_concat(lateral_layers, start_step=0, unit_block=8, activation=tf.nn.re
         return l
 
 
-def unet3_decoder(latent, lateral_layers, activation=tf.nn.relu, norm='instance', scope='unet3_decoder', b_train=False):
+def segment_decoder(latent, lateral_layers, activation=tf.nn.relu, norm='instance', scope='unet3_decoder', b_train=False):
     with tf.variable_scope(scope, reuse=tf.AUTO_REUSE):
-        print(scope + ' Decoder Input: ' + str(latent.get_shape().as_list()))
+        print('Segment Decoder Input: ' + str(latent.get_shape().as_list()))
 
         lateral_layers.reverse()
+        segment_layer_depth = segment_unit_block_depth // 2
 
         for i in range(len(lateral_layers)):
             _, h, w, c = lateral_layers[i].get_shape().as_list()
@@ -580,46 +537,16 @@ def unet3_decoder(latent, lateral_layers, activation=tf.nn.relu, norm='instance'
                 print('Decoder Residual: ' + str(lateral_layers[i].get_shape().as_list()))
                 lateral_layers[i] = layers.add_residual_block(lateral_layers[i], filter_dims=[3, 3, c],
                                                               scope='decoder_residual_' + str(i) + str(num_rblock))
-            lateral_layers[i] = layers.conv(lateral_layers[i], scope='upsacle_conv' + str(i), filter_dims=[1, 1, unet_unit_block_depth],
-                                        stride_dims=[1, 1], non_linear_fn=None)
+            r = input_height // h
+            lateral_layers[i] = layers.conv(lateral_layers[i], scope='upsacle_conv' + str(i),
+                                            filter_dims=[1, 1, r * r * segment_layer_depth],
+                                            stride_dims=[1, 1], non_linear_fn=None)
             lateral_layers[i] = layers.conv_normalize(lateral_layers[i], norm=norm, b_train=b_train,
-                                                  scope='upscale_norm' + str(i))
+                                                      scope='upscale_norm' + str(i))
             lateral_layers[i] = activation(lateral_layers[i])
-            lateral_layers[i] = tf.image.resize_images(lateral_layers[i], size=[input_height, input_width])
+            lateral_layers[i] = tf.nn.depth_to_space(lateral_layers[i], r)
 
         segment_layer = tf.reduce_mean(lateral_layers, axis=0)
-        segment_layer_depth = unet_unit_block_depth // 4
-        segment_layer = layers.conv(segment_layer, scope='segment_resize', filter_dims=[1, 1, segment_layer_depth],
-                                    stride_dims=[1, 1], non_linear_fn=None)
-        segment_layer = layers.conv_normalize(segment_layer, norm=norm, b_train=b_train,
-                                              scope='segment_resize_norm')
-        segment_layer = activation(segment_layer)
-        segment_layer = layers.add_residual_block(segment_layer, filter_dims=[3, 3, segment_layer_depth],
-                                                  scope='refinement')
-        segment_layer = layers.conv(segment_layer, scope='segment_output', filter_dims=[3, 3, 1],
-                                    stride_dims=[1, 1], non_linear_fn=tf.nn.sigmoid)
-
-        '''
-        for i in range(len(lateral_layers)):
-            _, h, w, c = lateral_layers[i].get_shape().as_list()
-            for num_rblock in range(2):
-                print('Decoder Residual: ' + str(lateral_layers[i].get_shape().as_list()))
-                lateral_layers[i] = layers.add_residual_block(lateral_layers[i], filter_dims=[3, 3, c],
-                                                              scope='decoder_residual_' + str(i) + str(num_rblock))
-        l = unet3_add_merge(lateral_layers, activation=activation, norm=norm, scope='unet3_add_merge', b_train=b_train)
-        print('Merged Output: ' + str(l.get_shape().as_list()))
-        segment_layer_depth = l.get_shape().as_list()[-1]
-        segment_layer_depth = segment_layer_depth // 2
-        segment_layer = layers.conv(l, scope='merged_layer_conv', filter_dims=[3, 3, segment_layer_depth],
-                                    stride_dims=[1, 1], non_linear_fn=None)
-        segment_layer = layers.conv_normalize(segment_layer, norm=norm, b_train=b_train,
-                                              scope='merged_layer_norm')
-        segment_layer = activation(segment_layer)
-        segment_layer = layers.add_residual_block(segment_layer, filter_dims=[3, 3, segment_layer_depth],
-                                                  scope='merge_block')
-        print('Merged Target Output: ' + str(segment_layer.get_shape().as_list()))
-
-        segment_layer = tf.image.resize_images(segment_layer, size=[input_height, input_width])
         segment_layer = layers.conv(segment_layer, scope='segment_resize', filter_dims=[3, 3, segment_layer_depth],
                                     stride_dims=[1, 1], non_linear_fn=None)
         segment_layer = layers.conv_normalize(segment_layer, norm=norm, b_train=b_train,
@@ -629,50 +556,8 @@ def unet3_decoder(latent, lateral_layers, activation=tf.nn.relu, norm='instance'
                                                   scope='refinement')
         segment_layer = layers.conv(segment_layer, scope='segment_output', filter_dims=[3, 3, 1],
                                     stride_dims=[1, 1], non_linear_fn=tf.nn.sigmoid)
-        '''
 
     return segment_layer
-
-
-def unet_decoder(latent, lateral_layers, activation=tf.nn.relu, norm='instance', scope='unet_decoder', b_train=False):
-    with tf.variable_scope(scope, reuse=tf.AUTO_REUSE):
-        print(scope + ' decoder input: ' + str(latent.get_shape().as_list()))
-        block_depth = unet_unit_block_depth * (2 ** (1 + segmentation_upsample_num))
-
-        l = latent
-        lateral_layers.reverse()
-
-        for i in range(segmentation_upsample_num + 1):
-            block_depth = block_depth // 2
-
-            # ESPCN
-            l = layers.conv(l, scope='espcn_1_' + str(i), filter_dims=[3, 3, block_depth * 2 * 2], stride_dims=[1, 1],
-                            non_linear_fn=None)
-            l = layers.conv_normalize(l, norm=norm, b_train=b_train, scope='upsample_norm_' + str(i))
-            l = activation(l)
-            l = tf.nn.depth_to_space(l, 2)
-
-            # Resize & Conv
-            # _, h, w, _ = l.get_shape().as_list()
-            # l = tf.image.resize_images(l, size=[2 * h, 2 * w])
-            # l = layers.conv(l, scope='upsample_conv_' + str(i), filter_dims=[3, 3, block_depth],
-            #                stride_dims=[1, 1], non_linear_fn=None)
-            # l = layers.conv_normalize(l, norm=norm, b_train=b_train, scope='upsample_norm_' + str(i))
-            # l = activation(l)
-            print(scope + ' Upsampling: ' + str(l.get_shape().as_list()))
-
-            l = tf.concat([l, lateral_layers[i]], axis=-1)
-            l = layers.conv(l, scope='upsample_conv2_' + str(i), filter_dims=[3, 3, block_depth], stride_dims=[1, 1],
-                            non_linear_fn=None)
-            l = layers.conv_normalize(l, norm=norm, b_train=b_train, scope='upsample_norm2_' + str(i))
-            l = activation(l)
-
-        # l = layers.conv(l, scope='summation', filter_dims=[3, 3, block_depth], stride_dims=[1, 1], non_linear_fn=activation)
-        img = layers.conv(l, scope='last', filter_dims=[1, 1, 1], stride_dims=[1, 1], non_linear_fn=tf.nn.sigmoid)
-        img = tf.image.resize_images(img, size=[input_height, input_width])
-        print(scope + ' Output: ' + str(img.get_shape().as_list()))
-
-    return img
 
 
 def spatial_memory(query, size, dims, scope='spatial_aug_mem'):
@@ -818,13 +703,7 @@ def train(model_path='None'):
     print('Please wait. Preparing to start training...')
     train_start_time = time.time()
 
-    # Mask Creation
-    if use_roi_mask is True:
-        print('Create RoI Mask Image.')
-        roi_mask_img = create_roi_mask(input_width, input_height)
-    else:
-        roi_mask_img = None
-    cutout_mask = create_roi_mask(input_width, input_height, offset=60)
+    cutout_mask = create_roi_mask(input_width, input_height, offset=45)
     outlier_files = []
     if use_outlier_samples is True:
         # Classes
@@ -847,93 +726,68 @@ def train(model_path='None'):
     B_TRAIN = tf.placeholder(tf.bool)
     LR = tf.placeholder(tf.float32, None)
 
-    # Generator
-    query = encoder(X_IN, norm='layer', activation=util.swish, scope=G_Encoder_scope, b_train=B_TRAIN)
-    if use_style is True:
-        style = style_encoder(X_IN, norm='layer', scope=Style_Encoder_scope, b_train=B_TRAIN)
-    else:
-        style = None
-    attention_g, latent_g = spatial_memory(query, size=aug_mem_size, dims=representation_dimension, scope=G_M_scope)
-
-    if freeze_ae is False:
-        G_X, _ = decoder(latent_g, style, norm='layer', scope=G_Decoder_scope, b_train=B_TRAIN)
-    #unet_input = tf.concat([X_IN, G_X], axis=-1)
-    unet_input = X_IN
-    z_gen, laterals = unet_encoder(unet_input, mem_latents=latent_g, norm='instance', activation=tf.nn.leaky_relu, scope=G_UNet_Encoder_scope,
+    query = query_encoder(X_IN, norm='layer', activation=util.swish, scope=Qeury_Encoder_Scope)
+    attention_g, latent_g = spatial_memory(query, size=aug_mem_size, dims=representation_dimension, scope=LATENT_Memory_scope)
+    z_gen, laterals = segment_encoder(X_IN, mem_latents=latent_g, norm='instance', activation=tf.nn.leaky_relu, scope=SEGMENT_Encoder_scope,
                                    b_train=B_TRAIN)
+    U_G_X = segment_decoder(z_gen, laterals, norm='instance', activation=tf.nn.relu, scope=SEGMENT_Decoder_scope,
+                          b_train=B_TRAIN)
 
-    unet_residual_loss = 0.0
-    if use_unet3 is True:
-        U_G_X = unet3_decoder(z_gen, laterals, norm='instance', activation=tf.nn.relu, scope=G_UNet_Decoder_scope,
-                              b_train=B_TRAIN)
+    print('Segment decoder images: ' + str(U_G_X.get_shape().as_list()))
+    segment_residual_loss = 0.0
+    segment_residual_loss += get_residual_loss(U_G_X, S_IN, type='l1_focal')
+    segment_residual_loss += get_residual_loss(U_G_X, S_IN, type='ft', alpha=0.3)
 
-        print('unet3 decoder images: ' + str(U_G_X.get_shape().as_list()))
-        unet_residual_loss += get_residual_loss(U_G_X, S_IN, type='l1_focal')
-        unet_residual_loss += get_residual_loss(U_G_X, S_IN, type='ft', alpha=0.3)
-    else:
-        U_G_X = unet_decoder(z_gen, laterals, norm='layer', scope=G_UNet_Decoder_scope, b_train=B_TRAIN)
-        unet_residual_loss = get_residual_loss(U_G_X, S_IN, type='ft', alpha=0.8)
+    if freeze_reconstructor is False:
+        G_X, _ = image_reconstructor(latent_g, norm='layer', scope=Image_Reconstructor_Scope, b_train=B_TRAIN)
+        reconstructor_residual_loss = get_residual_loss(G_X, Y_IN, type='ssim_l1', alpha=0.8)
 
-    if freeze_ae is False:
-        pseudo_residual_loss = get_residual_loss(G_X, Y_IN, type='ssim_l1', alpha=0.8)
+        if use_categorical_constraints is True:
+            cat_samples = categorical_sample(attention_g)
+            cat_onehot = tf.one_hot(cat_samples, aug_mem_size)
 
-    if use_categorical_constraints is True:
-        cat_samples = categorical_sample(attention_g)
-        cat_onehot = tf.one_hot(cat_samples, aug_mem_size)
+            use_strict_categorical_dist = True
 
-        use_strict_categorical_dist = True
+            if use_strict_categorical_dist is False:
+                smoothing_p = 0.3
+                smoothing_factor = smoothing_p / aug_mem_size
+                cat_onehot = tf.nn.relu(cat_onehot - smoothing_p - smoothing_factor) + smoothing_factor
 
-        if use_strict_categorical_dist is False:
-            smoothing_p = 0.3
-            smoothing_factor = smoothing_p / aug_mem_size
-            cat_onehot = tf.nn.relu(cat_onehot - smoothing_p - smoothing_factor) + smoothing_factor
+            sparsity_reg_loss = get_residual_loss(attention_g, cat_onehot, type='focal', alpha=sparsity)  # More discrete
+        else:
+            sparsity_reg_loss = get_residual_loss(attention_g, None, type='entropy', alpha=sparsity)  # Less discrete
 
-        sparsity_reg_loss = get_residual_loss(attention_g, cat_onehot, type='focal', alpha=sparsity)  # More discrete
-    else:
-        sparsity_reg_loss = get_residual_loss(attention_g, None, type='entropy', alpha=sparsity)  # Less discrete
+        reconstructor_residual_loss += sparsity_reg_loss
 
-    if freeze_ae is False:
-        pseudo_residual_loss += sparsity_reg_loss
-
-    if use_gan is True:
-        fake_features, fake_logit = discriminator(x1=U_G_X, x2=X_IN, norm='layer', scope=D_scope, b_train=B_TRAIN)
-        real_features, real_logit = discriminator(x1=S_IN, x2=X_IN, norm='layer', scope=D_scope, b_train=B_TRAIN)
+    if use_discriminator is True:
+        fake_features, fake_logit = discriminator(x1=U_G_X, x2=X_IN, norm='layer', scope=DISC_scope, b_train=B_TRAIN)
+        real_features, real_logit = discriminator(x1=S_IN, x2=X_IN, norm='layer', scope=DISC_scope, b_train=B_TRAIN)
         d_real_loss = get_discriminator_loss(tf.ones_like(real_logit), real_logit, type='ls') + \
                       get_discriminator_loss(tf.zeros_like(fake_logit), fake_logit, type='ls')
         d_fake_loss = get_discriminator_loss(tf.ones_like(fake_logit), fake_logit, type='ls')
+        disc_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=DISC_scope)
+        segment_residual_loss = segment_residual_loss + 1e-2 * d_fake_loss
 
-        # d_feature_loss = 0.0
-        # for num_feature in range(len(fake_features)):
-        #    d_feature_loss = d_feature_loss + get_residual_loss(real_features[num_feature], fake_features[num_feature], type='l1')
-        # d_feature_loss = d_feature_loss / len(fake_features)
+    segment_encoder_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=SEGMENT_Encoder_scope)
+    segment_decoder_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=SEGMENT_Decoder_scope)
+    segment_generator_vars = segment_encoder_vars + segment_decoder_vars
 
-        disc_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=D_scope)
-        unet_residual_loss = unet_residual_loss + 1e-2 * d_fake_loss
-
-    unet_encoder_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=G_UNet_Encoder_scope)
-    unet_decoder_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=G_UNet_Decoder_scope)
-    unet_generator_vars = unet_encoder_vars + unet_decoder_vars
-
-    ae_encoder_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=G_Encoder_scope)
-    ae_decoder_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=G_Decoder_scope)
-    ae_vars = ae_encoder_vars + ae_decoder_vars
-    style_encoder_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=Style_Encoder_scope)
-    memory_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=G_M_scope)
-    pseudo_generator_vars = memory_vars + ae_vars + style_encoder_vars
-    total_joint_variable = unet_generator_vars + pseudo_generator_vars
+    query_encoder_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=Qeury_Encoder_Scope)
+    image_decoder_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=Image_Reconstructor_Scope)
+    reconstructor_vars = query_encoder_vars + image_decoder_vars
+    memory_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=LATENT_Memory_scope)
+    image_reconstuctor_vars = memory_vars + reconstructor_vars
+    total_joint_variable = segment_generator_vars + image_reconstuctor_vars
     # Optimizer
-    unet_loss = unet_residual_loss
-    if freeze_ae is False:
-        mnet_loss = pseudo_residual_loss
+    segment_loss = segment_residual_loss
+    if freeze_reconstructor is False:
+        reconstruct_loss = reconstructor_residual_loss
 
-    unet_generator_optimizer = tf.train.AdamOptimizer(learning_rate=LR).minimize(unet_loss,
-                                                                                 var_list=unet_generator_vars)
-    if freeze_ae is False:
-        pseudo_generator_optimizer = tf.train.AdamOptimizer(learning_rate=LR).minimize(mnet_loss,
-                                                                                       var_list=pseudo_generator_vars)
-        joint_optimizer = tf.train.AdamOptimizer(learning_rate=LR).minimize(unet_loss + mnet_loss,
-                                                                            var_list=total_joint_variable)
-    if use_gan is True:
+    segmentation_optimizer = tf.train.AdamOptimizer(learning_rate=LR).minimize(segment_loss, var_list=segment_generator_vars)
+    if freeze_reconstructor is False:
+        reconstruction_optimizer = tf.train.AdamOptimizer(learning_rate=LR).minimize(reconstruct_loss, var_list=image_reconstuctor_vars)
+        joint_optimizer = tf.train.AdamOptimizer(learning_rate=LR).minimize(segment_loss + reconstruct_loss, var_list=total_joint_variable)
+    if use_discriminator is True:
         # d_opt = tf.train.AdamOptimizer(learning_rate=LR)
         # d_gradients = d_opt.compute_gradients(-disc_loss, disc_vars)
         # clipped_d_gradients = [(tf.clip_by_value(grad, -0.01, 0.01), var) for grad, var in d_gradients]
@@ -943,46 +797,51 @@ def train(model_path='None'):
     config = tf.ConfigProto(allow_soft_placement=True)
     config.gpu_options.allow_growth = True
 
-    ae_model_path = os.path.join(model_path, 'ae/m.chpt').replace("\\", "/")
-    uae_model_path = os.path.join(model_path, 'uae/m.chpt').replace("\\", "/")
-    if use_gan is True:
+    reconstructor_model_path = os.path.join(model_path, 'recon/m.chpt').replace("\\", "/")
+    segment_model_path = os.path.join(model_path, 'seg/m.chpt').replace("\\", "/")
+    if use_discriminator is True:
         disc_model_path = os.path.join(model_path, 'disc/m.chpt').replace("\\", "/")
         discriminator_saver = tf.train.Saver(disc_vars)
-    pseudo_generator_saver = tf.train.Saver(pseudo_generator_vars)
-    ae_encoder_savers = tf.train.Saver(ae_encoder_vars)
-    if freeze_ae is False:
-        ae_decoder_savers = tf.train.Saver(ae_decoder_vars)
-    ae_mem_savers = tf.train.Saver(memory_vars)
-    unet_generator_saver = tf.train.Saver(unet_generator_vars)
-    unet_encoder_saver = tf.train.Saver(unet_encoder_vars)
-    unet_decoder_saver = tf.train.Saver(unet_decoder_vars)
+    image_reconstructor_saver = tf.train.Saver(reconstructor_vars)
+    query_encoder_savers = tf.train.Saver(query_encoder_vars)
+    if freeze_reconstructor is False:
+        image_decoder_savers = tf.train.Saver(image_decoder_vars)
+    latent_mem_savers = tf.train.Saver(memory_vars)
+    segment_generator_saver = tf.train.Saver(segment_generator_vars)
+    segment_encoder_saver = tf.train.Saver(segment_encoder_vars)
+    segment_decoder_saver = tf.train.Saver(segment_decoder_vars)
 
     with tf.Session(config=config) as sess:
         sess.run(tf.global_variables_initializer())
 
         try:
-            if freeze_ae is True:
-                ae_mem_savers.restore(sess, ae_model_path)
+            if freeze_reconstructor is True:
+                latent_mem_savers.restore(sess, reconstructor_model_path)
                 print('Load latent memory.')
-                ae_encoder_savers.restore(sess, ae_model_path)
+                query_encoder_savers.restore(sess, reconstructor_model_path)
                 print('Load latent encoder.')
             else:
-                pseudo_generator_saver.restore(sess, ae_model_path)
+                image_reconstructor_saver.restore(sess, reconstructor_model_path)
                 print('Load pseudo-generator.')
-            num_pretrain = 0
-            if use_gan is True:
+        except:
+            print('Reconstructor Load Failed')
+        try:
+            if use_discriminator is True:
                 discriminator_saver.restore(sess, disc_model_path)
                 print('Load discriminator.')
+        except:
+            print('Discriminator Load Failed')
+        try:
             # unet_generator_saver.restore(sess, uae_model_path)
-            unet_encoder_saver.restore(sess, uae_model_path)
-            print('Load segentation encoder.')
-            unet_decoder_saver.restore(sess, uae_model_path)
+            segment_encoder_saver.restore(sess, segment_model_path)
+            print('Load segmentation encoder.')
+        except:
+            print('Segment Encoder Load Failed')
+        try:
+            segment_decoder_saver.restore(sess, segment_model_path)
             print('Load segmentation decoder.')
         except:
-            if num_pretrain == 0:
-                print('Start Training UNet Generator Only. Wait ...')
-            else:
-                print('Start New Training. Wait ...')
+            print('Segment Decoder Load Failed')
 
         te_dir = test_data
         tr_dir = train_data
@@ -1024,17 +883,17 @@ def train(model_path='None'):
             training_batch = zip(range(0, total_input_size, batch_size),
                                  range(batch_size, total_input_size + 1, batch_size))
             itr = 0
-            with tf.device('/CPU:0'):
-                # Perlin Noise
-                perlin_res = int(np.random.choice([16, 32, 64], size=1))  # 1024 x 1024
-                # perlin_res = int(np.random.choice([8, 16, 32], size=1)) # 512 x 512
-                # perlin_res = 2, perlin_octave = 4 : for large smooth object augmentation.
-                perlin_octave = 5
-                noise = util.generate_fractal_noise_2d((input_width, input_height), (perlin_res, perlin_res),
-                                                       perlin_octave)
-                # noise = util.generate_perlin_noise_2d((input_width, input_height), (perlin_res, perlin_res))
-                perlin_noise = np.where(noise > np.average(noise), 1.0, 0.0)
-                perlin_noise = np.expand_dims(perlin_noise, axis=-1)
+
+            # Perlin Noise
+            perlin_res = int(np.random.choice([16, 32, 64], size=1))  # 1024 x 1024
+            # perlin_res = int(np.random.choice([8, 16, 32], size=1)) # 512 x 512
+            # perlin_res = 2, perlin_octave = 4 : for large smooth object augmentation.
+            perlin_octave = 5
+            noise = util.generate_fractal_noise_2d((input_width, input_height), (perlin_res, perlin_res),
+                                                   perlin_octave)
+            # noise = util.generate_perlin_noise_2d((input_width, input_height), (perlin_res, perlin_res))
+            perlin_noise = np.where(noise > np.average(noise), 1.0, 0.0)
+            perlin_noise = np.expand_dims(perlin_noise, axis=-1)
 
             # Learning rate schedule
             lr = 0.5 * learning_rate * (1.0 + np.cos(np.pi * (e / num_epoch)))
@@ -1051,72 +910,70 @@ def train(model_path='None'):
 
                 if np.random.randint(1, 10) < 3:
                     b_use_bg_samples = False
-                with tf.device('/CPU:0'):
-                    if b_use_outlier_samples is True:
-                        sample_outlier_files = np.random.choice(outlier_files,
-                                                                size=np.random.random_integers(low=1, high=7))
-                        sample_outlier_imgs, _, _ = load_images(sample_outlier_files, rotate=True)
-                        sample_outlier_imgs = np.sum(sample_outlier_imgs, axis=0)
-                        # sample_outlier_imgs = aug_noise + sample_outlier_imgs
-                        aug_noise = sample_outlier_imgs
-                        aug_noise = np.where(aug_noise > 0.9, 1.0, 0.0)
-                        b_use_cutdout = False
-                    else:
-                        aug_noise = perlin_noise
-                        if np.random.randint(1, 10) < 5:
-                            if len(hard_samples) > 0:
-                                aug_noise = hard_samples[0]
-                                b_use_cutdout = False
 
-                    batch_imgs, gt_imgs, seg_imgs = load_images(tr_files[start + 1:end], rotate=True, shift=True, flip=True,
-                                                                mask_noise=aug_noise, mask=roi_mask_img,
-                                                                cutout=b_use_cutdout, cutout_mask=cutout_mask)
+                if b_use_outlier_samples is True:
+                    sample_outlier_files = np.random.choice(outlier_files,
+                                                            size=np.random.random_integers(low=1, high=7))
+                    sample_outlier_imgs, _, _ = load_images(sample_outlier_files, rotate=True)
+                    sample_outlier_imgs = np.sum(sample_outlier_imgs, axis=0)
+                    # sample_outlier_imgs = aug_noise + sample_outlier_imgs
+                    aug_noise = sample_outlier_imgs
+                    aug_noise = np.where(aug_noise > 0.9, 1.0, 0.0)
+                    b_use_cutdout = False
+                else:
+                    aug_noise = perlin_noise
+                    if np.random.randint(1, 10) < 5:
+                        if len(hard_samples) > 0:
+                            aug_noise = hard_samples[0]
+                            b_use_cutdout = False
+
+                batch_imgs, gt_imgs, seg_imgs = load_images(tr_files[start + 1:end], rotate=True, shift=True, flip=True,
+                                                            mask_noise=aug_noise, cutout=b_use_cutdout, cutout_mask=cutout_mask)
+                seg_imgs = np.where(seg_imgs > 0, 1.0, 0.0)
+
+                if b_use_bg_samples is True:
+                    # noise_samples = np.random.choice(tr_files, size=batch_size)
+                    random_index = np.random.choice(len(labeled_X), size=batch_size - 1, replace=False)
+                    noise_sample_files_X = labeled_X[random_index]
+                    noise_sample_files_Y = labeled_Y[random_index]
+                    noise_sample_images, _, _ = load_images(noise_sample_files_X)
+                    noise_sample_segments, _, _ = load_images(noise_sample_files_Y, gray_scale=True)
+                    flip_axis = np.random.random_integers(low=1, high=2)
+                    noise_sample_images = np.flip(noise_sample_images, axis=flip_axis)
+                    noise_sample_segments = np.flip(noise_sample_segments, axis=flip_axis)
+                    # noise_sample_imgs, _, _ = load_images(noise_samples, rotate=True)
+                    blending_a = np.random.uniform(low=0.0, high=0.7)
+                    noise_sample_images = (1 - blending_a) * noise_sample_images + blending_a * batch_imgs
+                    # fg = seg_imgs * noise_sample_imgs
+                    fg = noise_sample_segments * noise_sample_images
+                    # bg = (1 - seg_imgs) * batch_imgs
+                    bg = (1 - noise_sample_segments) * batch_imgs
+                    batch_imgs = fg + bg
+                    seg_imgs = seg_imgs + noise_sample_segments
                     seg_imgs = np.where(seg_imgs > 0, 1.0, 0.0)
 
-                    if b_use_bg_samples is True:
-                        # noise_samples = np.random.choice(tr_files, size=batch_size)
-                        random_index = np.random.choice(len(labeled_X), size=batch_size - 1, replace=False)
-                        noise_sample_files_X = labeled_X[random_index]
-                        noise_sample_files_Y = labeled_Y[random_index]
-                        noise_sample_images, _, _ = load_images(noise_sample_files_X)
-                        noise_sample_segments, _, _ = load_images(noise_sample_files_Y, gray_scale=True)
-                        flip_axis = np.random.random_integers(low=1, high=2)
-                        noise_sample_images = np.flip(noise_sample_images, axis=flip_axis)
-                        noise_sample_segments = np.flip(noise_sample_segments, axis=flip_axis)
-                        # noise_sample_imgs, _, _ = load_images(noise_samples, rotate=True)
-                        blending_a = np.random.uniform(low=0.0, high=0.7)
-                        noise_sample_images = (1 - blending_a) * noise_sample_images + blending_a * batch_imgs
-                        # fg = seg_imgs * noise_sample_imgs
-                        fg = noise_sample_segments * noise_sample_images
-                        # bg = (1 - seg_imgs) * batch_imgs
-                        bg = (1 - noise_sample_segments) * batch_imgs
-                        batch_imgs = fg + bg
-                        seg_imgs = seg_imgs + noise_sample_segments
-                        seg_imgs = np.where(seg_imgs > 0, 1.0, 0.0)
-
-                    b_img, gt, seg = load_images([tr_files[start]], rotate=True, shift=True, flip=True,
-                                                 mask_noise=None, mask=roi_mask_img,
-                                                 cutout=False, cutout_mask=cutout_mask)
-                    batch_imgs = np.append(batch_imgs, b_img, axis=0)
-                    gt_imgs = np.append(gt_imgs, gt, axis=0)
-                    seg_imgs = np.append(seg_imgs, seg, axis=0)
+                b_img, gt, seg = load_images([tr_files[start]], rotate=True, shift=True, flip=True,
+                                             mask_noise=None, cutout=False, cutout_mask=cutout_mask)
+                batch_imgs = np.append(batch_imgs, b_img, axis=0)
+                gt_imgs = np.append(gt_imgs, gt, axis=0)
+                seg_imgs = np.append(seg_imgs, seg, axis=0)
 
                 if meta_training is True:  # Meta Training
-                    if freeze_ae is False:
-                        _, pseudo_g_loss = sess.run([pseudo_generator_optimizer, mnet_loss],
+                    if freeze_reconstructor is False:
+                        _, pseudo_g_loss = sess.run([reconstruction_optimizer, reconstruct_loss],
                                                     feed_dict={X_IN: batch_imgs, Y_IN: gt_imgs, LR: lr,
                                                                B_TRAIN: True})
-                    _, unet_g_loss, u_g_x_imgs = sess.run(
-                        [unet_generator_optimizer, unet_loss, U_G_X],
+                    _, segment_g_loss, u_g_x_imgs = sess.run(
+                        [segmentation_optimizer, segment_loss, U_G_X],
                         feed_dict={X_IN: batch_imgs, S_IN: seg_imgs, LR: lr, B_TRAIN: True})
                 else:
-                    _, unet_g_loss, pseudo_g_loss, u_g_x_imgs = sess.run(
-                        [joint_optimizer, unet_loss, mnet_loss, U_G_X],
+                    _, segment_g_loss, pseudo_g_loss, u_g_x_imgs = sess.run(
+                        [joint_optimizer, segment_loss, reconstruct_loss, U_G_X],
                         feed_dict={X_IN: batch_imgs, Y_IN: gt_imgs, S_IN: seg_imgs, LR: lr, B_TRAIN: True})
-                if freeze_ae is True:
-                    print('epoch: ' + str(e) + ', unet_g_loss: ' + str(unet_g_loss))
+                if freeze_reconstructor is True:
+                    print('epoch: ' + str(e) + ', unet_g_loss: ' + str(segment_g_loss))
                 else:
-                    print('epoch: ' + str(e) + ', unet_g_loss: ' + str(unet_g_loss) + ', pseudo_g_loss: ' +
+                    print('epoch: ' + str(e) + ', unet_g_loss: ' + str(segment_g_loss) + ', pseudo_g_loss: ' +
                           str(pseudo_g_loss))
 
                 hard_sample = seg_imgs - u_g_x_imgs
@@ -1136,9 +993,22 @@ def train(model_path='None'):
                     # cv2.imwrite(out_dir + '/' + str(itr) + '_recon.jpg', 255 * g_x_imgs[0])
                     print('Elapsed Time at  ' + str(e) + '/' + str(num_epoch) + ' epochs, ' +
                           str(time.time() - train_start_time) + ' sec')
-                if use_gan is True:
+                if use_discriminator is True:
                     _ = sess.run([disc_optimizer],
                                  feed_dict={X_IN: batch_imgs, S_IN: seg_imgs, LR: lr, B_TRAIN: True})
+                if itr % 30 == 0:
+                    try:
+                        print('Saving model...')
+                        # total_saver = tf.train.Saver()
+                        # total_saver.save(sess, model_path, write_meta_graph=False)
+                        if freeze_reconstructor is False:
+                            image_reconstructor_saver.save(sess, reconstructor_model_path, write_meta_graph=False)
+                        segment_generator_saver.save(sess, segment_model_path, write_meta_graph=False)
+                        if use_discriminator is True:
+                            discriminator_saver.save(sess, disc_model_path, write_meta_graph=False)
+                        print('Saved.')
+                    except:
+                        print('Save failed')
 
             if use_semisupervised is True:
                 # Semi Supervised.
@@ -1155,7 +1025,7 @@ def train(model_path='None'):
                         labeled_img_X, _, _ = load_images(labeled_file_X)
                         labeled_img_Y, _, _ = load_images(labeled_file_Y, gray_scale=True)
 
-                        _, u_loss, u_g_x_imgs = sess.run([unet_generator_optimizer, unet_loss, U_G_X],
+                        _, u_loss, u_g_x_imgs = sess.run([segmentation_optimizer, segment_loss, U_G_X],
                                                          feed_dict={X_IN: labeled_img_X, S_IN: labeled_img_Y, LR: lr,
                                                                     B_TRAIN: True})
                         itr += 1
@@ -1164,14 +1034,13 @@ def train(model_path='None'):
                             cv2.imwrite(out_dir + '/' + str(itr) + '_pred.jpg', 255 * u_g_x_imgs[0])
                             cv2.imwrite(out_dir + '/' + str(itr) + '_gt.jpg', 255 * labeled_img_Y[0])
                             cv2.imwrite(out_dir + '/' + str(itr) + '.jpg', 255 * labeled_img_X[0])
+
             try:
                 print('Saving model...')
-                # total_saver = tf.train.Saver()
-                # total_saver.save(sess, model_path, write_meta_graph=False)
-                if freeze_ae is False:
-                    pseudo_generator_saver.save(sess, ae_model_path, write_meta_graph=False)
-                unet_generator_saver.save(sess, uae_model_path, write_meta_graph=False)
-                if use_gan is True:
+                if freeze_reconstructor is False:
+                    image_reconstructor_saver.save(sess, reconstructor_model_path, write_meta_graph=False)
+                segment_generator_saver.save(sess, segment_model_path, write_meta_graph=False)
+                if use_discriminator is True:
                     discriminator_saver.save(sess, disc_model_path, write_meta_graph=False)
                 print('Saved.')
             except:
@@ -1184,12 +1053,9 @@ def train(model_path='None'):
                 for t_s, t_e in te_batch:
                     test_imgs, _, _ = load_images(te_files[t_s:t_e], base_dir=te_dir)
                     u_gx_imgs = sess.run(U_G_X, feed_dict={X_IN: test_imgs, B_TRAIN: False})
-                    u_gx_imgs = np.where(u_gx_imgs > 0.94, 1.0, 0.0)
-                    delta_imgs = np.abs(u_gx_imgs - test_imgs)
 
                     for i in range(batch_size):
                         cv2.imwrite('out/' + te_files[t_s + i], 255 * u_gx_imgs[i])
-                        cv2.imwrite('out/delta_img_' + te_files[t_s + i], 255 * delta_imgs[i])
                         # s = calculate_anomaly_score(255 * delta_imgs[i], input_width, input_height, filter_size=32)
                         print('Test: ' + te_files[t_s + i])
 
@@ -1224,34 +1090,34 @@ def test(model_path):
     B_TRAIN = tf.placeholder(tf.bool)
 
     # Generator
-    query = encoder(X_IN, norm='layer', activation=util.swish, scope=G_Encoder_scope, b_train=B_TRAIN)
-    _, latent_g = spatial_memory(query, size=aug_mem_size, dims=representation_dimension, scope=G_M_scope)
-    z_gen, laterals = unet_encoder(X_IN, mem_latents=latent_g, norm='instance', activation=tf.nn.leaky_relu,
-                                   scope=G_UNet_Encoder_scope,
+    query = query_encoder(X_IN, norm='layer', activation=util.swish, scope=Qeury_Encoder_Scope, b_train=B_TRAIN)
+    _, latent_g = spatial_memory(query, size=aug_mem_size, dims=representation_dimension, scope=LATENT_Memory_scope)
+    z_gen, laterals = segment_encoder(X_IN, mem_latents=latent_g, norm='instance', activation=tf.nn.leaky_relu,
+                                   scope=SEGMENT_Encoder_scope,
                                    b_train=B_TRAIN)
-    U_G_X = unet3_decoder(z_gen, laterals, norm='instance', scope=G_UNet_Decoder_scope, b_train=B_TRAIN)
+    U_G_X = segment_decoder(z_gen, laterals, norm='instance', scope=SEGMENT_Decoder_scope, b_train=B_TRAIN)
 
-    unet_encoder_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=G_UNet_Encoder_scope)
-    unet_decoder_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=G_UNet_Decoder_scope)
-    unet_generator_vars = unet_encoder_vars + unet_decoder_vars
-    ae_encoder_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=G_Encoder_scope)
+    segment_encoder_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=SEGMENT_Encoder_scope)
+    segment_decoder_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=SEGMENT_Decoder_scope)
+    segment_generator_vars = segment_encoder_vars + segment_decoder_vars
+    query_encoder_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=Qeury_Encoder_Scope)
 
-    memory_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=G_M_scope)
+    memory_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=LATENT_Memory_scope)
     config = tf.ConfigProto(allow_soft_placement=True)
     config.gpu_options.allow_growth = True
 
-    ae_model_path = os.path.join(model_path, 'ae/m.chpt').replace("\\", "/")
-    uae_model_path = os.path.join(model_path, 'uae/m.chpt').replace("\\", "/")
+    reconstructor_model_path = os.path.join(model_path, 'recon/m.chpt').replace("\\", "/")
+    segment_model_path = os.path.join(model_path, 'seg/m.chpt').replace("\\", "/")
 
-    latent_saver = tf.train.Saver(ae_encoder_vars + memory_vars)
-    unet_generator_saver = tf.train.Saver(unet_generator_vars)
+    latent_saver = tf.train.Saver(query_encoder_vars + memory_vars)
+    segment_generator_saver = tf.train.Saver(segment_generator_vars)
 
     with tf.Session(config=config) as sess:
         try:
-            latent_saver.restore(sess, ae_model_path)
-            print('Load pseudo-generator.')
-            unet_generator_saver.restore(sess, uae_model_path)
-            print('Load unet-generator.')
+            latent_saver.restore(sess, reconstructor_model_path)
+            print('Load latent memory.')
+            segment_generator_saver.restore(sess, segment_model_path)
+            print('Load segment generator.')
         except:
             print('Fail to load ...')
             return
@@ -1304,20 +1170,14 @@ if __name__ == '__main__':
     aug_data = args.aug_data
     bg_mask_data = args.bgmask_data
     noise_data = args.noise_data
-
-    use_unet3 = True
-    unet3_unit_block_depth = 32
     unit_block_depth = 16
-    unet_unit_block_depth = 48
-
+    segment_unit_block_depth = 48
     disc_unit_block_depth = 8
     bottleneck_num = 0
     decoder_bottleneck_num = 0
     query_dimension = 128
     style_dimension = 128
-
     representation_dimension = query_dimension
-
     segmentation_upsample_ratio = 4
     segmentation_downsample_num = int(np.log2(segmentation_upsample_ratio))
     segmentation_upsample_num = segmentation_downsample_num
@@ -1326,18 +1186,15 @@ if __name__ == '__main__':
     upsample_num = downsample_num
     aug_mem_size = 2048
     num_channel = 3
-    use_style = False
     use_categorical_constraints = True
-    use_roi_mask = False
     use_outlier_samples = True
     use_bg_samples = True
     num_samples_per_class = 5
     meta_training = True
-    use_deep_supervision = False
-    freeze_ae = True
+    freeze_reconstructor = True
     if meta_training is False:
-        freeze_ae = False
-    use_gan = False
+        freeze_reconstructor = False
+    use_discriminator = False
 
     if mode == 'train':
         train(model_path)
