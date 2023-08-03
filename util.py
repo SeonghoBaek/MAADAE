@@ -1,12 +1,18 @@
 # ==============================================================================
 # Author: Seongho Baek
 # Contact: seonghobaek@gmail.com
+#
 # ==============================================================================
 
+USE_TF_2 = False
 
+if USE_TF_2 is True:
+    import tensorflow.compat.v1 as tf
+    tf.disable_v2_behavior()
+else:
+    import tensorflow as tf
 import math
 import numpy as np
-import tensorflow as tf
 import errno
 import os
 import copy
@@ -721,7 +727,7 @@ def random_augments(images, probability=0.5, seed=None):
         return image
 
 
-def random_augment_brightness_constrast(images, probability=0.2, seed=None):
+def random_augment_brightness_constrast(images, probability=0.5, seed=None):
     with tf.name_scope('RandomAugmentBC', values=[images]):
         random_prob = tf.random_uniform([], minval=0.0, maxval=1.0, dtype=tf.float32, seed=seed)
 
@@ -762,8 +768,8 @@ def random_adjust_brightness(image,
 
 
 def random_adjust_contrast(image,
-                           min_delta=0.8,
-                           max_delta=1.2,
+                           min_delta=0.5,
+                           max_delta=1.5,
                            probability=0.7,
                            seed=None):
     """Randomly adjusts contrast.
