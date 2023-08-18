@@ -1091,7 +1091,7 @@ def test(model_path):
     _, latent_g = spatial_memory(query, size=aug_mem_size, dims=representation_dimension, scope=LATENT_Memory_scope)
     z_gen, laterals = segment_encoder(X_IN, mem_latents=latent_g, norm='instance', activation=layers.swish,
                                       scope=SEGMENT_Encoder_scope, b_train=B_TRAIN)
-    U_G_X = segment_decoder(z_gen, laterals, norm='instance', scope=SEGMENT_Decoder_scope, b_train=B_TRAIN)
+    U_G_X = segment_decoder(z_gen, laterals, norm='instance', scope=SEGMENT_Decoder_scope, activation=layers.swish, b_train=B_TRAIN)
 
     segment_encoder_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=SEGMENT_Encoder_scope)
     segment_decoder_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=SEGMENT_Decoder_scope)
