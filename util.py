@@ -87,13 +87,6 @@ def sigmoid_normalize(value_list):
     return alist
 
 
-def swish(logit,  name='swish'):
-    with tf.name_scope(name):
-        l = tf.multiply(logit, tf.nn.sigmoid(logit))
-
-        return l
-
-
 def generate_samples(dim, num_inlier, num_outlier, normalize=True):
     inlier = np.random.normal(0.0, 1.0, [num_inlier, dim])
 
