@@ -3,8 +3,6 @@
 # Contact: seonghobaek@gmail.com
 #
 # ==============================================================================
-import layers
-
 USE_TF_2 = False
 
 if USE_TF_2 is True:
@@ -951,8 +949,9 @@ def add_residual_block(in_layer, filter_dims, act_func=tf.nn.relu, norm='layer',
                 l = conv_normalize(l, norm=norm, b_train=b_train, scope='bt_norm1')
                 l = act_func(l)
                 l = add_residual_layer(l, filter_dims=[filter_dims[0], filter_dims[1], bn_depth], act_func=act_func,
-                                       norm=norm, b_train=b_train,cope='residual_layer1', padding=padding, pad=pad,
-                                       num_groups=num_groups)
+                                       norm=norm,
+                                       b_train=b_train,
+                                       scope='residual_layer1', padding=padding, pad=pad, num_groups=num_groups)
                 l = conv(l, scope='bt_conv2', filter_dims=[1, 1, num_channel_out], stride_dims=[1, 1],
                          non_linear_fn=None)
                 l = conv_normalize(l, norm=norm, b_train=b_train, scope='bt_norm3')
@@ -1138,5 +1137,9 @@ def up_sample(x, scale_factor=2):
     return tf.image.resize_nearest_neighbor(x, size=new_size)
 
 
-def swish(x):
-    return tf.multiply(x, tf.nn.sigmoid(x))
+def swish(x, beta=0.8):
+    return tf.multiply(x, tf.nn.sigmoid(beta*x))
+
+
+def mish(x):
+    return x * tf.nn.tanh(tf.nn.softplus(x))
