@@ -45,12 +45,13 @@ def load_images(file_name_list, base_dir=None, mask=None, mask_noise=None, cutou
                 return None
 
             if contrast is True:
-                lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
-                l, a, b = cv2.split(lab)
-                clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-                l = clahe.apply(l)
-                lab = cv2.merge((l, a, b))
-                img = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+                if np.random.randint(0, 10) < 5:
+                    lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
+                    l, a, b = cv2.split(lab)
+                    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+                    l = clahe.apply(l)
+                    lab = cv2.merge((l, a, b))
+                    img = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
 
             h, w, c = img.shape
             img = cv2.resize(img, dsize=(input_width, input_height), interpolation=cv2.INTER_AREA)
@@ -123,7 +124,7 @@ def load_images(file_name_list, base_dir=None, mask=None, mask_noise=None, cutou
                     fg_img = seg_img * img
                     alpha = np.random.uniform(low=0.5, high=0.7)
 
-                    random_pixels = 2 * np.random.rand()
+                    random_pixels = 2 * (0.1 + np.random.rand())
                     structural_noise = util.rotate_image(img, np.random.randint(0, 360))
                     cut_mask = np.abs(cut_mask * (structural_noise * random_pixels))
 
@@ -141,7 +142,7 @@ def load_images(file_name_list, base_dir=None, mask=None, mask_noise=None, cutou
                         fg_img = seg_img * img
                         alpha = np.random.uniform(low=0.5, high=0.7)
 
-                        random_pixels = 2 * np.random.rand()
+                        random_pixels = 2 * (0.1 + np.random.rand())
                         structural_noise = util.rotate_image(img, np.random.randint(0, 360))
                         cut_mask = np.abs(cut_mask * (structural_noise * random_pixels))
                         cut_mask = np.abs(np.where(cut_mask > 255, 255, cut_mask))
@@ -303,7 +304,7 @@ def query_encoder(in_tensor, activation=tf.nn.relu, norm='instance', scope='enco
             print(' Downsample: ' + str(l.get_shape().as_list()))
 
         for i in range(num_bottleneck):
-            l = layers.add_residual_block(l, filter_dims=[3, 3, block_depth], norm=norm,  b_train=b_train,
+            l = layers.add_residual_block(l, filter_dims=[3, 3, block_depth], norm=norm, b_train=b_train,
                                           act_func=activation, scope=scope + '_bt_block_' + str(i))
 
             print(' Bottleneck Block : ' + str(l.get_shape().as_list()))
@@ -328,7 +329,7 @@ def image_reconstructor(content, activation=tf.nn.relu, norm='instance', scope='
         #l = layers.conv(l, scope='init', filter_dims=[3, 3, block_depth], stride_dims=[1, 1], non_linear_fn=activation)
 
         for i in range(decoder_bottleneck_num):
-            l = layers.add_residual_block(l, filter_dims=[3, 3, block_depth], norm=norm,  b_train=b_train,
+            l = layers.add_residual_block(l, filter_dims=[3, 3, block_depth], norm=norm, b_train=b_train,
                                           act_func=activation, scope=scope + '_bt_block_' + str(i))
 
             print(' Bottleneck Block : ' + str(l.get_shape().as_list()))
@@ -364,7 +365,7 @@ def segment_encoder(in_tensor, mem_latents, activation=tf.nn.relu, norm='instanc
         block_depth = segment_unit_block_depth
         lateral_layers = []
 
-        l = layers.conv(in_tensor, scope='init', filter_dims=[3, 3, 2 * segment_unit_block_depth], stride_dims=[2, 2],
+        l = layers.conv(in_tensor, scope='init', filter_dims=[3, 3, 2*segment_unit_block_depth], stride_dims=[2, 2],
                         non_linear_fn=None)
         l = layers.conv_normalize(l, norm=norm, b_train=b_train, scope='init_norm')
         l = activation(l)
@@ -401,14 +402,14 @@ def segment_encoder(in_tensor, mem_latents, activation=tf.nn.relu, norm='instanc
             print(' Add Lateral: ' + str(l.get_shape().as_list()))
             lateral_layers.append(l)
 
-        for n_loop in range(2):
+        for n_loop in range(num_shuffle_car):
             for i in range(len(lateral_layers)):
                 _, h, w, c = lateral_layers[i].get_shape().as_list()
-                for num_rblock in range(2):
+                for j in range(num_car):
                     print(' Conv Layer: ' + str(lateral_layers[i].get_shape().as_list()))
                     lateral_layers[i] = layers.add_residual_block(lateral_layers[i], filter_dims=[3, 3, c], norm=norm,
                                                                   b_train=b_train, act_func=activation,
-                                                                  scope='loop_sqblock_' + str(n_loop) + str(i) + str(num_rblock))
+                                                                  scope='loop_sqblock_' + str(n_loop) + str(i) + str(j))
 
             print('Shuffling...')
             fused_layers = []
@@ -536,24 +537,34 @@ def segment_decoder(latent, lateral_layers, activation=tf.nn.relu, norm='instanc
         print('Segment Decoder Input: ' + str(latent.get_shape().as_list()))
 
         lateral_layers.reverse()
-        segment_layer_depth = segment_unit_block_depth // 2
+        segment_layer_depth = segment_unit_block_depth
 
         for i in range(len(lateral_layers)):
             _, h, w, c = lateral_layers[i].get_shape().as_list()
-            for num_rblock in range(2):
+            for num_rblock in range(num_car):
                 print('Decoder Residual: ' + str(lateral_layers[i].get_shape().as_list()))
-                lateral_layers[i] = layers.add_residual_block(lateral_layers[i], filter_dims=[3, 3, c], norm=norm,  b_train=b_train,
+                lateral_layers[i] = layers.add_residual_block(lateral_layers[i], filter_dims=[3, 3, c], norm=norm, b_train=b_train,
                                                               act_func=activation, scope='decoder_residual_' + str(i) + str(num_rblock))
-            r = input_height // h
-            lateral_layers[i] = layers.conv(lateral_layers[i], scope='upsacle_conv' + str(i),
-                                            filter_dims=[3, 3, r * r * segment_layer_depth],
+
+        average_map = lateral_layers[-1]
+        _, h, w, c = average_map.get_shape().as_list()
+        r = input_height // h
+
+        for i in range(len(lateral_layers)-1):
+            lateral_layers[i] = layers.conv(lateral_layers[i], scope='lateral_resize' + str(i), filter_dims=[3, 3, c],
                                             stride_dims=[1, 1], non_linear_fn=None)
             lateral_layers[i] = layers.conv_normalize(lateral_layers[i], norm=norm, b_train=b_train,
-                                                      scope='upscale_norm' + str(i))
+                                                  scope='lateral_resize_norm' + str(i))
             lateral_layers[i] = activation(lateral_layers[i])
-            lateral_layers[i] = tf.nn.depth_to_space(lateral_layers[i], r)
+            lateral_layers[i] = tf.image.resize_images(lateral_layers[i], size=[h, w])
+            average_map = tf.add(average_map, lateral_layers[i])
 
-        average_map = tf.reduce_mean(lateral_layers, axis=0)
+        average_map = layers.conv(average_map, scope='upsacle_conv', filter_dims=[3, 3, r * r * segment_layer_depth],
+                                  stride_dims=[1, 1], non_linear_fn=None)
+        average_map = layers.conv_normalize(average_map, norm=norm, b_train=b_train, scope='upscale_norm')
+        average_map = activation(average_map)
+        average_map = tf.nn.depth_to_space(average_map, r)
+
         # Multi Resolution Effect
         segment_layer = layers.conv(average_map, scope='segment_resize', filter_dims=[3, 3, segment_layer_depth],
                                     stride_dims=[1, 1], non_linear_fn=None)
@@ -561,8 +572,13 @@ def segment_decoder(latent, lateral_layers, activation=tf.nn.relu, norm='instanc
                                               scope='segment_resize_norm')
         segment_layer = activation(segment_layer)
         residual_layer = layers.add_residual_block(average_map, filter_dims=[3, 3, segment_layer_depth],
-                                                  act_func=activation, norm=norm,  b_train=b_train, scope='refinement')
+                                                   act_func=activation, norm=norm, b_train=b_train, scope='refinement1')
         segment_layer = tf.add(segment_layer, residual_layer)
+        segment_layer = layers.conv(segment_layer, scope='segment_merge', filter_dims=[3, 3, segment_layer_depth],
+                                    stride_dims=[1, 1], non_linear_fn=None)
+        segment_layer = layers.conv_normalize(segment_layer, norm=norm, b_train=b_train,
+                                              scope='segment_merge_norm')
+        segment_layer = activation(segment_layer)
         segment_layer = layers.conv(segment_layer, scope='segment_output', filter_dims=[3, 3, 1],
                                     stride_dims=[1, 1], non_linear_fn=tf.nn.sigmoid)
 
@@ -708,7 +724,7 @@ def create_roi_mask(width, height, offset=60):
     return mask_img
 
 
-def train(model_path='None'):
+def train(model_path='None', mode='train'):
     print('Please wait. Preparing to start training...')
     train_start_time = time.time()
 
@@ -737,9 +753,9 @@ def train(model_path='None'):
 
     query = query_encoder(X_IN, norm='instance', activation=layers.swish, scope=Qeury_Encoder_Scope, b_train=B_TRAIN)
     attention_g, latent_g = spatial_memory(query, size=aug_mem_size, dims=representation_dimension, scope=LATENT_Memory_scope)
-    z_gen, laterals = segment_encoder(X_IN, mem_latents=latent_g, norm='instance', activation=layers.swish, scope=SEGMENT_Encoder_scope,
-                                      b_train=B_TRAIN)
-    U_G_X = segment_decoder(z_gen, laterals, norm='instance', activation=layers.swish, scope=SEGMENT_Decoder_scope, b_train=B_TRAIN)
+    z_gen, laterals = segment_encoder(X_IN, mem_latents=latent_g, norm='instance', scope=SEGMENT_Encoder_scope,
+                                      activation=layers.mish, b_train=B_TRAIN)
+    U_G_X = segment_decoder(z_gen, laterals, norm='instance', activation=layers.mish, scope=SEGMENT_Decoder_scope, b_train=B_TRAIN)
 
     print('Segment decoder images: ' + str(U_G_X.get_shape().as_list()))
     segment_residual_loss = 0.0
@@ -747,7 +763,7 @@ def train(model_path='None'):
     segment_residual_loss += get_residual_loss(U_G_X, S_IN, type='ft', alpha=0.3)
 
     if freeze_reconstructor is False:
-        G_X, _ = image_reconstructor(latent_g, activation=layers.swish, norm='instance', scope=Image_Reconstructor_Scope, b_train=True)
+        G_X, _ = image_reconstructor(latent_g, activation=tf.nn.relu, norm='instance', scope=Image_Reconstructor_Scope, b_train=True)
         reconstructor_residual_loss = get_residual_loss(G_X, Y_IN, type='ssim_l1', alpha=0.8)
 
         if use_categorical_constraints is True:
@@ -853,10 +869,15 @@ def train(model_path='None'):
 
         te_dir = test_data
         tr_dir = train_data
+        up_dir = update_data
 
         # Classes
         classes = os.listdir(tr_dir)
-        print(' Num classes: ' + str(len(classes)))
+        print(' Train classes: ' + str(len(classes)))
+
+        if mode == 'update':
+            update_classes = os.listdir(up_dir)
+            print(' Update classes: ' + str(len(update_classes)))
 
         # Supervised Settings
         labeled_list_X = os.listdir('data/supervised/X')
@@ -880,13 +901,23 @@ def train(model_path='None'):
             for cls in classes:
                 class_path = os.path.join(tr_dir, cls).replace("\\", "/")
                 samples = os.listdir(class_path)
-                samples = np.random.choice(samples, size=num_samples_per_class)  # (1000//len(classes)))
+                if mode == 'update':
+                    samples = np.random.choice(samples, size=1)
+                else:
+                    samples = np.random.choice(samples, size=num_samples_per_class)  # (1000//len(classes)))
                 for s in samples:
                     sample_path = os.path.join(class_path, s).replace("\\", "/")
                     tr_files.append(sample_path)
+            if mode == 'update':
+                for cls in update_classes:
+                    class_path = os.path.join(up_dir, cls).replace("\\", "/")
+                    samples = os.listdir(class_path)
+                    samples = np.random.choice(samples, size=num_samples_per_class)  # (1000//len(classes)))
+                    for s in samples:
+                        sample_path = os.path.join(class_path, s).replace("\\", "/")
+                        tr_files.append(sample_path)
             print(' Num samples per epoch: ' + str(len(tr_files)))
             total_input_size = len(tr_files)
-
             training_batch = zip(range(0, total_input_size, batch_size),
                                  range(batch_size, total_input_size + 1, batch_size))
             itr = 0
@@ -934,7 +965,7 @@ def train(model_path='None'):
                             aug_noise = hard_samples[0]
                             b_use_cutdout = False
 
-                batch_imgs, gt_imgs, seg_imgs = load_images(tr_files[start + 1:end], rotate=True, shift=True, flip=True,
+                batch_imgs, gt_imgs, seg_imgs = load_images(tr_files[start + 1:end], rotate=True, shift=True, flip=True, contrast=True,
                                                             mask_noise=aug_noise, cutout=b_use_cutdout, cutout_mask=cutout_mask)
                 seg_imgs = np.where(seg_imgs > 0, 1.0, 0.0)
 
@@ -959,7 +990,7 @@ def train(model_path='None'):
                     seg_imgs = seg_imgs + noise_sample_segments
                     seg_imgs = np.where(seg_imgs > 0, 1.0, 0.0)
 
-                b_img, gt, seg = load_images([tr_files[start]], rotate=True, shift=True, flip=True,
+                b_img, gt, seg = load_images([tr_files[start]], rotate=True, shift=True, flip=True, contrast=True,
                                              mask_noise=None, cutout=False, cutout_mask=cutout_mask)
                 batch_imgs = np.append(batch_imgs, b_img, axis=0)
                 gt_imgs = np.append(gt_imgs, gt, axis=0)
@@ -1019,7 +1050,7 @@ def train(model_path='None'):
                     except:
                         print('Save failed')
 
-            if use_semisupervised is True and e % 10 == 0:
+            if use_semisupervised is True and e % 2 == 0:
                 itr = 0
                 #random_index = np.random.choice(len(labeled_Y), size=batch_size*10, replace=False)
                 #sup_X = labeled_X[random_index]
@@ -1033,7 +1064,7 @@ def train(model_path='None'):
                     labeled_file_X = sup_X[start:end]
                     labeled_file_Y = sup_Y[start:end]
 
-                    labeled_img_X, _, _ = load_images(labeled_file_X)
+                    labeled_img_X, _, _ = load_images(labeled_file_X, contrast=True)
                     labeled_img_Y, _, _ = load_images(labeled_file_Y, gray_scale=True)
 
                     _, u_loss, u_g_x_imgs = sess.run([segmentation_optimizer, segment_loss, U_G_X],
@@ -1089,9 +1120,9 @@ def test(model_path):
     # Generator
     query = query_encoder(X_IN, norm='instance', activation=layers.swish, scope=Qeury_Encoder_Scope, b_train=B_TRAIN)
     _, latent_g = spatial_memory(query, size=aug_mem_size, dims=representation_dimension, scope=LATENT_Memory_scope)
-    z_gen, laterals = segment_encoder(X_IN, mem_latents=latent_g, norm='instance', activation=layers.swish,
+    z_gen, laterals = segment_encoder(X_IN, mem_latents=latent_g, norm='instance', activation=layers.mish,
                                       scope=SEGMENT_Encoder_scope, b_train=B_TRAIN)
-    U_G_X = segment_decoder(z_gen, laterals, norm='instance', scope=SEGMENT_Decoder_scope, activation=layers.swish, b_train=B_TRAIN)
+    U_G_X = segment_decoder(z_gen, laterals, norm='instance', activation=layers.mish, scope=SEGMENT_Decoder_scope, b_train=B_TRAIN)
 
     segment_encoder_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=SEGMENT_Encoder_scope)
     segment_decoder_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=SEGMENT_Decoder_scope)
@@ -1138,10 +1169,11 @@ def test(model_path):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
 
-    parser.add_argument('--mode', type=str, help='train/test', default='train')
+    parser.add_argument('--mode', type=str, help='train/test/update', default='train')
     parser.add_argument('--model_path', type=str, help='model check point file path', default='model/m.ckpt')
     parser.add_argument('--train_data', type=str, help='training data directory', default='data/train')
     parser.add_argument('--test_data', type=str, help='test data directory', default='data/test')
+    parser.add_argument('--update_data', type=str, help='update data directory', default='data/update')
     parser.add_argument('--aug_data', type=str, help='augmentation samples', default='data/augmentation')
     parser.add_argument('--noise_data', type=str, help='specific noise data samples', default='data/noise')
     parser.add_argument('--out_dir', type=str, help='output directory', default='imgs')
@@ -1160,6 +1192,7 @@ if __name__ == '__main__':
     model_path = args.model_path
     train_data = args.train_data
     test_data = args.test_data
+    update_data = args.update_data
     out_dir = args.out_dir
     num_epoch = args.epoch
     alpha = args.alpha
@@ -1181,6 +1214,8 @@ if __name__ == '__main__':
     upsample_num = downsample_num
     aug_mem_size = 2048
     num_channel = 3
+    num_shuffle_car = 3
+    num_car = 2
     use_categorical_constraints = True
     use_outlier_samples = True
     use_bg_samples = True
@@ -1192,9 +1227,7 @@ if __name__ == '__main__':
         freeze_reconstructor = False
     use_discriminator = False
 
-    if mode == 'train':
-        train(model_path)
-    elif mode == 'test':
+    if mode == 'test':
         test(model_path)
     else:
-        print('Train or Test?')
+        train(model_path, mode)
