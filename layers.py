@@ -788,25 +788,26 @@ def ca_block(input, ratio=8, norm='instance', scope='cord_attention', b_train=Tr
         _, h, w, c = input.get_shape().as_list()
 
         l_h = tf.nn.avg_pool(input, ksize=[1, 1, w, 1], strides=[1, 1, 1, 1], padding='VALID')
-        # print('avg_pool h: ' + str(l_h.get_shape().as_list()))
+        #print('avg_pool h: ' + str(l_h.get_shape().as_list()))
         l_w = tf.nn.avg_pool(input, ksize=[1, h, 1, 1], strides=[1, 1, 1, 1], padding='VALID')
-        # print('avg_pool w: ' + str(l_w.get_shape().as_list()))
+        #print('avg_pool w: ' + str(l_w.get_shape().as_list()))
         l_w = tf.transpose(l_w, [0, 2, 1, 3])
-        # print('transpose w: ' + str(l_w.get_shape().as_list()))
+        #print('transpose w: ' + str(l_w.get_shape().as_list()))
         l_c = tf.concat([l_h, l_w], axis=1)
+        #print('concat : ' + str(l_c.get_shape().as_list()))
         l_c = conv(l_c, scope='squeeze', filter_dims=[1, 1, c // ratio], stride_dims=[1, 1],
                    non_linear_fn=None)
         l_c = conv_normalize(l_c, norm=norm, b_train=b_train, scope='norm')
         l_c = tf.nn.leaky_relu(l_c)
-        # print('squeeze: ' + str(l_c.get_shape().as_list()))
+        #print('squeeze: ' + str(l_c.get_shape().as_list()))
         l_h, l_w = tf.split(l_c, num_or_size_splits=2, axis=1)
         l_w = tf.transpose(l_w, [0, 2, 1, 3])
         l_h = conv(l_h, scope='excitate_h', filter_dims=[1, 1, c], stride_dims=[1, 1],
                    non_linear_fn=tf.nn.sigmoid)
-        # print('excitate h: ' + str(l_h.get_shape().as_list()))
+        #print('excitate h: ' + str(l_h.get_shape().as_list()))
         l_w = conv(l_w, scope='excitate_w', filter_dims=[1, 1, c], stride_dims=[1, 1],
                    non_linear_fn=tf.nn.sigmoid)
-        # print('excitate w: ' + str(l_w.get_shape().as_list()))
+        #print('excitate w: ' + str(l_w.get_shape().as_list()))
 
         ca = input * l_h * l_w
 
