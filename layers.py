@@ -1,7 +1,6 @@
 # ==============================================================================
 # Author: Seongho Baek
 # Contact: seonghobaek@gmail.com
-#
 # ==============================================================================
 USE_TF_2 = False
 
@@ -683,14 +682,52 @@ def layer_norm(x, scope="layer_norm", alpha_start=1.0, bias_start=0.0):
     return y
 
 
+def group_norm(x, scope="group_norm", alpha_start=1.0, bias_start=0.0, num_groups=8):
+    #if USE_TF_2 is False:
+    #    return tf.contrib.layers.instance_norm(x, scope=scope)
+
+    with tf.variable_scope(scope, reuse=tf.AUTO_REUSE):
+        _, h, w, num_ch = x.get_shape().as_list()
+        eps = 1e-6
+
+        if num_ch // num_groups < 1:
+            num_groups = 1
+        elif num_ch % num_groups != 0:
+            num_groups = 1
+
+        if num_groups > 1:
+            x_reshaped = tf.reshape(x, [-1, h, w, num_groups, num_ch // num_groups])
+            mean, sigma = tf.nn.moments(x_reshaped, [1, 2, 3], keep_dims=True)
+            # print('mean: ' + str(mean.get_shape().as_list()) + ', num_ch: ' + str(num_ch))
+
+            alpha = tf.get_variable('alpha', shape=[1, 1, 1, num_groups, 1], dtype=tf.float32,
+                                    initializer=tf.constant_initializer(alpha_start))
+            bias = tf.get_variable('bias', [1, 1, 1, num_groups, 1],
+                                   initializer=tf.constant_initializer(bias_start), dtype=tf.float32)
+            y_reshaped = tf.nn.batch_normalization(x_reshaped, mean, sigma, offset=bias, scale=alpha,
+                                                   variance_epsilon=eps)
+            y = tf.reshape(y_reshaped, [-1, h, w, num_ch])
+        else:
+            mean, sigma = tf.nn.moments(x, [1, 2], keep_dims=True)
+            # print('mean: ' + str(mean.get_shape().as_list()) + ', num_ch: ' + str(num_ch))
+
+            alpha = tf.get_variable('alpha', shape=[1, 1, 1, num_ch], dtype=tf.float32,
+                                    initializer=tf.constant_initializer(alpha_start))
+            bias = tf.get_variable('bias', [1, 1, 1, num_ch],
+                                   initializer=tf.constant_initializer(bias_start), dtype=tf.float32)
+            # print('alpha: ' + str(alpha.get_shape().as_list()) + ', bias: ' + str(bias.get_shape().as_list()))
+            # y = alpha * tf.div((x - mean), tf.rsqrt(sigma + eps)) + bias
+            y = tf.nn.batch_normalization(x, mean, sigma, offset=bias, scale=alpha, variance_epsilon=eps)
+
+    return y
+
 def instance_norm(x, scope="instance_norm", alpha_start=1.0, bias_start=0.0):
     #if USE_TF_2 is False:
     #    return tf.contrib.layers.instance_norm(x, scope=scope)
 
     with tf.variable_scope(scope, reuse=tf.AUTO_REUSE):
-        num_ch = x.get_shape()[-1]
+        _, h, w, num_ch = x.get_shape().as_list()
         eps = 1e-6
-
         mean, sigma = tf.nn.moments(x, [1, 2], keep_dims=True)
         # print('mean: ' + str(mean.get_shape().as_list()) + ', num_ch: ' + str(num_ch))
 
@@ -699,10 +736,8 @@ def instance_norm(x, scope="instance_norm", alpha_start=1.0, bias_start=0.0):
         bias = tf.get_variable('bias', [1, 1, 1, num_ch],
                                initializer=tf.constant_initializer(bias_start), dtype=tf.float32)
         # print('alpha: ' + str(alpha.get_shape().as_list()) + ', bias: ' + str(bias.get_shape().as_list()))
-
-    # tf.nn.batch_normalization calculate following code
-    # y = alpha * tf.div((x - mean), tf.rsqrt(sigma + eps)) + bias
-    y = tf.nn.batch_normalization(x, mean, sigma, offset=bias, scale=alpha, variance_epsilon=eps)
+        # y = alpha * tf.div((x - mean), tf.rsqrt(sigma + eps)) + bias
+        y = tf.nn.batch_normalization(x, mean, sigma, offset=bias, scale=alpha, variance_epsilon=eps)
 
     return y
 
@@ -788,26 +823,25 @@ def ca_block(input, ratio=8, norm='instance', scope='cord_attention', b_train=Tr
         _, h, w, c = input.get_shape().as_list()
 
         l_h = tf.nn.avg_pool(input, ksize=[1, 1, w, 1], strides=[1, 1, 1, 1], padding='VALID')
-        #print('avg_pool h: ' + str(l_h.get_shape().as_list()))
+        # print('avg_pool h: ' + str(l_h.get_shape().as_list()))
         l_w = tf.nn.avg_pool(input, ksize=[1, h, 1, 1], strides=[1, 1, 1, 1], padding='VALID')
-        #print('avg_pool w: ' + str(l_w.get_shape().as_list()))
+        # print('avg_pool w: ' + str(l_w.get_shape().as_list()))
         l_w = tf.transpose(l_w, [0, 2, 1, 3])
-        #print('transpose w: ' + str(l_w.get_shape().as_list()))
+        # print('transpose w: ' + str(l_w.get_shape().as_list()))
         l_c = tf.concat([l_h, l_w], axis=1)
-        #print('concat : ' + str(l_c.get_shape().as_list()))
         l_c = conv(l_c, scope='squeeze', filter_dims=[1, 1, c // ratio], stride_dims=[1, 1],
                    non_linear_fn=None)
         l_c = conv_normalize(l_c, norm=norm, b_train=b_train, scope='norm')
         l_c = tf.nn.leaky_relu(l_c)
-        #print('squeeze: ' + str(l_c.get_shape().as_list()))
+        # print('squeeze: ' + str(l_c.get_shape().as_list()))
         l_h, l_w = tf.split(l_c, num_or_size_splits=2, axis=1)
         l_w = tf.transpose(l_w, [0, 2, 1, 3])
         l_h = conv(l_h, scope='excitate_h', filter_dims=[1, 1, c], stride_dims=[1, 1],
                    non_linear_fn=tf.nn.sigmoid)
-        #print('excitate h: ' + str(l_h.get_shape().as_list()))
+        # print('excitate h: ' + str(l_h.get_shape().as_list()))
         l_w = conv(l_w, scope='excitate_w', filter_dims=[1, 1, c], stride_dims=[1, 1],
                    non_linear_fn=tf.nn.sigmoid)
-        #print('excitate w: ' + str(l_w.get_shape().as_list()))
+        # print('excitate w: ' + str(l_w.get_shape().as_list()))
 
         ca = input * l_h * l_w
 
@@ -917,7 +951,7 @@ def add_se_residual_block(in_layer, filter_dims, act_func=tf.nn.relu, norm='laye
 
 
 def add_residual_block(in_layer, filter_dims, act_func=tf.nn.relu, norm='layer', b_train=False,
-                       scope='residual_block', padding='SAME', pad=0, num_groups=1):
+                       scope='ca_residual_block', padding='SAME', pad=0, num_groups=1):
     with tf.variable_scope(scope, reuse=tf.AUTO_REUSE):
         l = in_layer
         num_channel_out = filter_dims[-1]
@@ -950,9 +984,8 @@ def add_residual_block(in_layer, filter_dims, act_func=tf.nn.relu, norm='layer',
                 l = conv_normalize(l, norm=norm, b_train=b_train, scope='bt_norm1')
                 l = act_func(l)
                 l = add_residual_layer(l, filter_dims=[filter_dims[0], filter_dims[1], bn_depth], act_func=act_func,
-                                       norm=norm,
-                                       b_train=b_train,
-                                       scope='residual_layer1', padding=padding, pad=pad, num_groups=num_groups)
+                                       norm=norm, b_train=b_train,cope='residual_layer1', padding=padding, pad=pad,
+                                       num_groups=num_groups)
                 l = conv(l, scope='bt_conv2', filter_dims=[1, 1, num_channel_out], stride_dims=[1, 1],
                          non_linear_fn=None)
                 l = conv_normalize(l, norm=norm, b_train=b_train, scope='bt_norm3')
@@ -984,9 +1017,7 @@ def conv_normalize(input, norm='layer', b_train=True, scope='conv_norm'):
         elif norm == 'instance':
             l = instance_norm(l, scope=scope)
         elif norm == 'group':
-            if USE_TF_2 is False:
-                l = tf.contrib.layers.group_norm(l, scope=scope)
-
+            l = group_norm(l, scope=scope, num_groups=8)
     return l
 
 
@@ -1144,3 +1175,7 @@ def swish(x, beta=0.8):
 
 def mish(x):
     return x * tf.nn.tanh(tf.nn.softplus(x))
+
+
+def erf(x, alpha, beta):
+    return x * tf.math.erf(alpha*tf.math.exp(beta*x))
